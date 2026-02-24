@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"outline-cli-ws/internal/config"
+	"github.com/balookrd/outline-cli-ws/internal/config"
 )
 
 type Dialer interface {

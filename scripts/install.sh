@@ -54,7 +54,7 @@ cd $TMP_DIR
 
 # Клонирование репозитория
 echo -e "${GREEN}Downloading source code...${NC}"
-git clone https://github.com/yourusername/outline-cli-ws.git
+git clone https://github.com/balookrd/outline-cli-ws.git
 cd outline-cli-ws
 
 # Сборка
