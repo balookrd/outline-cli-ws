@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/balookrd/outline-cli-ws/internal/config"
-	"github.com/balookrd/outline-cli-ws/internal/manager"
+	"outline-cli-ws/internal/config"
+	"outline-cli-ws/internal/manager"
 
 	"github.com/spf13/cobra"
 )

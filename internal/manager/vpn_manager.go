@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/balookrd/outline-cli-ws/internal/config"
-	"github.com/balookrd/outline-cli-ws/internal/shadowsocks"
-	"github.com/balookrd/outline-cli-ws/internal/transport"
+	"outline-cli-ws/internal/config"
+	"outline-cli-ws/internal/shadowsocks"
+	"outline-cli-ws/internal/transport"
 )
 
 type ConnectionStatus struct {
