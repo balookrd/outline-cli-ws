@@ -21,7 +21,7 @@ func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *UpstreamState) (*w
 	}
 
 	// 2) иначе — обычный dial
-	return DialWSStream(ctx, up.cfg.TCPWSS, lb.fwmark)
+	return lb.DialWSStreamLimited(ctx, up.cfg.TCPWSS)
 }
 
 // EnsureStandbyTCP гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).

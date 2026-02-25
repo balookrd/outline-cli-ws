@@ -8,8 +8,9 @@ tun:
   device: "tun0"
   mtu: 1500
   udp_max_flows: 4096
-  udp_idle_timeout: "60s"
-  udp_gc_interval: "10s"
+  udp_idle_timeout: 60s
+  udp_gc_interval: 10s
+  udp_flow_idle_timeout: 30s
 
 selection:
   sticky_ttl: "60s"

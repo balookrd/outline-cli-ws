@@ -213,9 +213,8 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		{Destination: header.IPv6EmptySubnet, NIC: nicID},
 	})
 
-	flowTable := newUDPFlowTable(lb, cfg)
+	portTable := newUDPPortTable(lb, cfg)
 
-	// UDP GC
 	go func() {
 		t := time.NewTicker(cfg.UDPGCInterval)
 		defer t.Stop()
@@ -224,7 +223,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				flowTable.gcOnce()
+				portTable.gcOnce()
 			}
 		}
 	}()
@@ -254,7 +253,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		if err != nil {
 			return
 		}
-		go tunHandleUDP(ctx, lb, flowTable, epUDP, id, &wq)
+		go tunHandleUDP(ctx, lb, portTable, epUDP, id, &wq)
 	})
 	st.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 
@@ -350,7 +349,7 @@ func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, i
 	_, _ = io.Copy(nsConn, out)
 }
 
-func tunHandleUDP(ctx context.Context, lb *LoadBalancer, ft *udpFlowTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
+func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
 	defer epUDP.Close()
 
 	nsUDP := gonet.NewUDPConn(wq, epUDP)
@@ -358,45 +357,25 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, ft *udpFlowTable, epUDP
 
 	srcIP := net.IP(id.LocalAddress.AsSlice()).String()
 	dstIP := net.IP(id.RemoteAddress.AsSlice()).String()
-
-	key := udpFlowKey{
-		netProto: ipVerFromAddrBytes(id.RemoteAddress.AsSlice()),
-		srcIP:    srcIP,
-		srcPort:  id.LocalPort,
-		dstIP:    dstIP,
-		dstPort:  id.RemotePort,
-	}
-
 	dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.RemotePort))
 
-	// ensure flow exists (per-flow Outline UDP session)
-	f := ft.get(key)
-	if f == nil {
-		up, err := lb.PickUDP()
-		if err != nil {
-			return
-		}
-		sess, err := NewOutlineUDPSession(ctx, lb, up)
-		if err != nil {
-			lb.ReportUDPFailure(up, err)
-			return
-		}
+	pk := udpPortKey{netProto: 4, srcIP: srcIP, srcPort: id.LocalPort}
+	if len(id.LocalAddress.AsSlice()) == 16 {
+		pk.netProto = 6
+	}
 
-		f = &udpFlow{
-			key:      key,
-			dst:      dst,
-			up:       up,
-			sess:     sess,
-			lastSeen: time.Now(),
-		}
-		if err := ft.put(key, f); err != nil {
-			sess.Close()
-			return
-		}
+	ps, err := pt.getOrCreate(ctx, pk)
+	if err != nil {
+		return
+	}
 
-		// Outline -> netstack (subscribe only our dst)
-		replyCh := sess.Subscribe(dst)
-		go func(flow *udpFlow) {
+	// subscribe once per dst inside this port-session
+	ps.mu.Lock()
+	if _, ok := ps.flows[dst]; !ok {
+		ps.flows[dst] = time.Now()
+
+		replyCh := ps.sess.Subscribe(dst)
+		go func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -406,15 +385,25 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, ft *udpFlowTable, epUDP
 						return
 					}
 					_, _ = nsUDP.Write(b)
-					ft.touch(flow.key)
+
+					now := time.Now()
+					ps.mu.Lock()
+					ps.flows[dst] = now
+					ps.mu.Unlock()
+
+					// touch port session
+					pt.mu.Lock()
+					if cur := pt.ports[pk]; cur != nil {
+						cur.lastSeen = now
+					}
+					pt.mu.Unlock()
 				}
 			}
-		}(f)
+		}()
 	}
+	ps.mu.Unlock()
 
-	ft.touch(key)
-
-	// netstack -> Outline
+	// stack -> outline
 	buf := make([]byte, 65535)
 	for {
 		n, _, err := nsUDP.ReadFrom(buf)
@@ -424,17 +413,27 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, ft *udpFlowTable, epUDP
 		if n == 0 {
 			continue
 		}
-		if err := f.sess.Send(dst, buf[:n]); err != nil {
-			lb.ReportUDPFailure(f.up, err)
+
+		if err := ps.sess.Send(dst, buf[:n]); err != nil {
+			lb.ReportUDPFailure(ps.up, err)
 			break
 		}
-		ft.touch(key)
+
+		now := time.Now()
+		ps.mu.Lock()
+		ps.flows[dst] = now
+		ps.mu.Unlock()
+
+		pt.mu.Lock()
+		if cur := pt.ports[pk]; cur != nil {
+			cur.lastSeen = now
+		}
+		pt.mu.Unlock()
 	}
 
-	// cleanup
-	if dead := ft.remove(key); dead != nil {
-		dead.closeOnce.Do(func() {
-			dead.sess.Close()
-		})
-	}
+	// optional: remove dst mapping early (GC и так вычистит)
+	ps.mu.Lock()
+	delete(ps.flows, dst)
+	ps.mu.Unlock()
+	ps.sess.Unsubscribe(dst)
 }

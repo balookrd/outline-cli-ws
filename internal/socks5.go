@@ -213,18 +213,3 @@ func readAddrPort(r io.Reader, atyp byte) (host, port string, err error) {
 	port = itoa(int(binary.BigEndian.Uint16(pb)))
 	return
 }
-
-func itoa(i int) string {
-	// tiny itoa, avoids strconv for brevity
-	if i == 0 {
-		return "0"
-	}
-	var b [6]byte
-	n := 0
-	for i > 0 {
-		b[len(b)-1-n] = byte('0' + (i % 10))
-		i /= 10
-		n++
-	}
-	return string(b[len(b)-n:])
-}

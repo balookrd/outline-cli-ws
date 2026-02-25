@@ -53,6 +53,8 @@ type LoadBalancer struct {
 
 	current     *UpstreamState
 	stickyUntil time.Time
+
+	dialSem chan struct{}
 }
 
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
@@ -63,7 +65,9 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	return &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
+	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
+	lb.dialSem = make(chan struct{}, 32) // default parallel dials
+	return lb
 }
 
 func (lb *LoadBalancer) PickTCP() (*UpstreamState, error) {
@@ -523,4 +527,28 @@ func (lb *LoadBalancer) nextIntervalOnSuccess(h hcState) time.Duration {
 		next = lb.hc.MaxInterval
 	}
 	return next
+}
+
+func (lb *LoadBalancer) acquireDialSlot(ctx context.Context) error {
+	select {
+	case lb.dialSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lb *LoadBalancer) releaseDialSlot() {
+	select {
+	case <-lb.dialSem:
+	default:
+	}
+}
+
+func (lb *LoadBalancer) DialWSStreamLimited(ctx context.Context, url string) (*websocket.Conn, error) {
+	if err := lb.acquireDialSlot(ctx); err != nil {
+		return nil, err
+	}
+	defer lb.releaseDialSlot()
+	return DialWSStream(ctx, url, lb.fwmark)
 }

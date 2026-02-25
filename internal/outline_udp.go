@@ -74,7 +74,6 @@ func (a *UDPAssociation) LocalAddr() net.Addr { return a.uc.LocalAddr() }
 
 func (a *UDPAssociation) Close() {
 	a.cancel()
-	_ = a.wsc.Close(websocket.StatusNormalClosure, "close")
 	_ = a.uc.Close()
 	_ = a.enc.Close()
 }
@@ -209,44 +208,6 @@ func parseSocksAddr(pkt []byte, off int, atyp byte) (host, port string, newOff i
 	return host, itoa(int(p)), off, nil
 }
 
-func parseSocksAddrFromPlain(plain []byte) (host, port string, off int, err error) {
-	if len(plain) < 1 {
-		return "", "", 0, errors.New("short")
-	}
-	atyp := plain[0]
-	off = 1
-	switch atyp {
-	case 0x01:
-		if len(plain) < off+4+2 {
-			return "", "", 0, errors.New("short ipv4")
-		}
-		host = net.IP(plain[off : off+4]).String()
-		off += 4
-	case 0x03:
-		if len(plain) < off+1 {
-			return "", "", 0, errors.New("short domain len")
-		}
-		l := int(plain[off])
-		off++
-		if len(plain) < off+l+2 {
-			return "", "", 0, errors.New("short domain")
-		}
-		host = string(plain[off : off+l])
-		off += l
-	case 0x04:
-		if len(plain) < off+16+2 {
-			return "", "", 0, errors.New("short ipv6")
-		}
-		host = net.IP(plain[off : off+16]).String()
-		off += 16
-	default:
-		return "", "", 0, errors.New("bad atyp")
-	}
-	p := binary.BigEndian.Uint16(plain[off : off+2])
-	off += 2
-	return host, itoa(int(p)), off, nil
-}
-
 // ---- WebSocket packet transport as net.PacketConn ----
 // One WS binary message = one UDP datagram bytes.
 
@@ -280,14 +241,11 @@ func (w *WSPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	return len(p), nil
 }
 
-func (w *WSPacketConn) Close() error                       { return nil }
+func (w *WSPacketConn) Close() error {
+	return w.c.Close(websocket.StatusNormalClosure, "close")
+}
+
 func (w *WSPacketConn) LocalAddr() net.Addr                { return dummyAddr{} }
 func (w *WSPacketConn) SetDeadline(t time.Time) error      { return nil }
 func (w *WSPacketConn) SetReadDeadline(t time.Time) error  { return nil }
 func (w *WSPacketConn) SetWriteDeadline(t time.Time) error { return nil }
-
-// dummy addr
-type dummyAddr struct{}
-
-func (dummyAddr) Network() string { return "udp" }
-func (dummyAddr) String() string  { return "0.0.0.0:0" }
