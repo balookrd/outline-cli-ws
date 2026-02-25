@@ -1,0 +1,30 @@
+listen:
+  socks5: "127.0.0.1:1080"
+
+selection:
+  sticky_ttl: "60s"
+  cooldown: "20s"
+  min_switch: "20ms"
+  warm_standby_n: 2
+  warm_standby_interval: "2s"
+
+healthcheck:
+  interval: "5s"
+  timeout: "3s"
+  fail_threshold: 2
+  success_threshold: 1
+
+upstreams:
+  - name: "s1"
+    weight: 1.0
+    tcp_wss: "wss://domain.su/tcp"
+    udp_wss: "wss://domain.su/udp"
+    cipher: "chacha20-ietf-poly1305"
+    secret: "secret"
+
+  - name: "s2"
+    weight: 0.5
+    tcp_wss: "wss://domain.su/tcp"
+    udp_wss: "wss://domain.su/udp"
+    cipher: "chacha20-ietf-poly1305"
+    secret: "secret"
