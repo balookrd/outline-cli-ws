@@ -1,18 +1,20 @@
 # Outline WS Load-Balancing Client
 
 Высокопроизводительный **Outline (Shadowsocks) клиент поверх WebSocket (ws/wss)**
-с поддержкой:
+с интеллектуальной балансировкой и активной проверкой качества каналов.
+
+Поддерживает:
 
 * ✅ TCP (`CONNECT`)
 * ✅ UDP (`UDP ASSOCIATE`)
-* ✅ Балансировки между несколькими серверами
-* ✅ Fastest-first + failover
-* ✅ Sticky-routing (без дёрганья)
-* ✅ Health-check (RTT + состояние)
-* ✅ Warm-standby (предварительно прогретые соединения)
+* ✅ Fastest-first + sticky
+* ✅ Runtime failover
+* ✅ Warm-standby (прогретые TCP WebSocket)
+* ✅ Adaptive health-check
+* ✅ Separate TCP/UDP health-check
+* ✅ Active quality probe (реальная проверка трафика)
 
-Работает с `outline-ss-server`, включая конфигурации с
-`websocket-stream` (TCP) и `websocket-packet` (UDP).
+Работает с `outline-ss-server` (websocket-stream + websocket-packet).
 
 ---
 
@@ -26,9 +28,11 @@ Local SOCKS5 (127.0.0.1:1080)
      │
      ▼
 Load Balancer
-  ├── Health Check (RTT EWMA)
+  ├── Separate TCP/UDP HC
+  ├── Adaptive Scheduler
+  ├── Active Quality Probe
   ├── Fastest-first + Sticky
-  ├── Failover (runtime + HC)
+  ├── Runtime Failover
   └── Warm-standby (TCP WS)
      │
      ▼
@@ -43,27 +47,71 @@ Outline Server
 
 ---
 
-# Возможности
+# Основные возможности
 
-## Балансировка
+## 1. Fastest-First + Sticky
 
-* Выбор **самого быстрого сервера** по EWMA RTT
-* Hysteresis (не переключается при мелких колебаниях)
-* Sticky TTL (держится за лучший сервер N секунд)
-* Runtime failover (мгновенное переключение при ошибке)
+* Выбор сервера с минимальным EWMA RTT
+* Hysteresis (min_switch)
+* Sticky TTL — не дёргается при мелких колебаниях
+* Failover при runtime-ошибке
 
-## Health-check
+---
 
-* Периодический WebSocket handshake
-* RTT измеряется и сглаживается
-* Fail threshold / Success threshold
-* Сервер автоматически возвращается в пул
+## 2. Separate TCP / UDP Health Check
 
-## Warm-Standby
+TCP и UDP endpoints проверяются **независимо**:
 
-* Держит N лучших серверов с **прогретым TCP WebSocket**
-* Failover без задержки на handshake
-* Автоматический сброс при падении сервера
+* TCP может быть UP, UDP DOWN
+* UDP может быть UP, TCP DOWN
+* Балансировка TCP и UDP происходит отдельно
+
+---
+
+## 3. Adaptive Health-Check
+
+Интервал проверок динамически меняется:
+
+* DOWN → проверки чаще (min_interval)
+* стабильный UP → проверки реже (до max_interval)
+* backoff_factor предотвращает DDOS самого сервера
+* jitter предотвращает синхронные всплески
+
+---
+
+## 4. Active Quality Probe
+
+Проверяется не просто WS handshake, а **реальный трафик**:
+
+### TCP Quality Probe
+
+```
+wss → Shadowsocks → example.com:80 → HEAD /
+```
+
+Считается успешным, если получен `HTTP/` ответ.
+
+### UDP Quality Probe (DNS)
+
+```
+wss(packet) → Shadowsocks UDP → 1.1.1.1:53 → DNS A example.com
+```
+
+Считается успешным при получении корректного DNS ответа.
+
+Это гарантирует:
+
+* шифрование работает
+* сервер реально маршрутизирует трафик
+* обратный канал работает
+
+---
+
+## 5. Warm-Standby
+
+* Держит N лучших серверов с уже открытым TCP WebSocket
+* Новый CONNECT не ждёт handshake
+* Failover происходит почти мгновенно
 
 ---
 
@@ -71,7 +119,7 @@ Outline Server
 
 Требуется Go 1.22+
 
-```bash
+```
 git clone <repo>
 cd outline-ws-lb
 go mod tidy
@@ -81,7 +129,7 @@ go mod tidy
 
 # Запуск
 
-```bash
+```
 go run . -c config.yaml
 ```
 
@@ -93,7 +141,7 @@ SOCKS5 по умолчанию:
 
 Проверка:
 
-```bash
+```
 curl -x socks5h://127.0.0.1:1080 https://ifconfig.me
 ```
 
@@ -109,6 +157,11 @@ listen:
 
 healthcheck:
   interval: "5s"
+  min_interval: "1s"
+  max_interval: "30s"
+  jitter: "200ms"
+  backoff_factor: 1.6
+  rtt_scale: 0.25
   timeout: "3s"
   fail_threshold: 2
   success_threshold: 1
@@ -119,6 +172,14 @@ selection:
   min_switch: "20ms"
   warm_standby_n: 2
   warm_standby_interval: "2s"
+
+probe:
+  enable_tcp: true
+  enable_udp: true
+  timeout: "2s"
+  tcp_target: "example.com:80"
+  udp_target: "1.1.1.1:53"
+  dns_name: "example.com"
 
 upstreams:
   - name: "server-1"
@@ -142,200 +203,106 @@ upstreams:
 
 ## healthcheck
 
-| Параметр          | Описание                                    |
-| ----------------- | ------------------------------------------- |
-| interval          | Интервал проверки                           |
-| timeout           | Таймаут WS handshake                        |
-| fail_threshold    | После скольких ошибок сервер считается DOWN |
-| success_threshold | Сколько успешных проверок нужно для UP      |
+| Параметр          | Описание                     |
+| ----------------- | ---------------------------- |
+| interval          | Базовый интервал             |
+| min_interval      | Минимальный (DOWN)           |
+| max_interval      | Максимальный (стабильный UP) |
+| backoff_factor    | Рост интервала при фейлах    |
+| rtt_scale         | Влияние RTT на частоту       |
+| jitter            | Рандомизация                 |
+| fail_threshold    | DOWN после N ошибок          |
+| success_threshold | UP после N успехов           |
 
 ---
 
 ## selection
 
-| Параметр              | Описание                                   |
-| --------------------- | ------------------------------------------ |
-| sticky_ttl            | Сколько держаться за fastest               |
-| cooldown              | На сколько "наказать" упавший сервер       |
-| min_switch            | Минимальное улучшение RTT для переключения |
-| warm_standby_n        | Сколько серверов держать прогретыми        |
-| warm_standby_interval | Как часто обновлять прогрев                |
+| Параметр              | Описание                                 |
+| --------------------- | ---------------------------------------- |
+| sticky_ttl            | Сколько держаться за fastest             |
+| cooldown              | Наказание упавшего                       |
+| min_switch            | Минимальный выигрыш RTT для переключения |
+| warm_standby_n        | Сколько серверов греть                   |
+| warm_standby_interval | Частота прогрева                         |
 
 ---
 
-## upstream
+## probe
 
-| Поле    | Описание                                        |
-| ------- | ----------------------------------------------- |
-| name    | Имя для логов                                   |
-| weight  | Вес (1 = нормальный, 2 = предпочтение)          |
-| tcp_wss | WebSocket endpoint для TCP (`websocket-stream`) |
-| udp_wss | WebSocket endpoint для UDP (`websocket-packet`) |
-| cipher  | AEAD cipher (например `chacha20-ietf-poly1305`) |
-| secret  | Ключ Outline                                    |
-
----
-
-# Как работает выбор сервера
-
-## 1. Fastest-first
-
-Score рассчитывается из:
-
-```
-RTT (EWMA)
-+ штраф за failCount
-+ штраф за stale health-check
-- учёт веса
-```
-
-Выбирается сервер с минимальным score.
+| Параметр   | Описание                   |
+| ---------- | -------------------------- |
+| enable_tcp | Включить TCP quality probe |
+| enable_udp | Включить UDP DNS probe     |
+| tcp_target | Цель HTTP probe            |
+| udp_target | DNS сервер                 |
+| dns_name   | DNS имя для запроса        |
+| timeout    | Таймаут probe              |
 
 ---
 
-## 2. Sticky
+# Поведение при сбоях
 
-После выбора:
-
-```
-sticky_until = now + sticky_ttl
-```
-
-Пока сервер healthy — клиент остаётся на нём.
-
----
-
-## 3. Failover
-
-Происходит немедленно при:
-
-* Ошибке Dial WS
-* Ошибке TCP туннеля
-* Ошибке создания UDP ассоциации
-* Health-check пометил DOWN
-
----
-
-## 4. Warm-standby
-
-Каждые `warm_standby_interval`:
-
-* Выбираются N лучших серверов
-* Если нет прогретого TCP WS — создаётся заранее
-* При CONNECT используется готовое соединение
-
-Это сокращает задержку первого запроса.
-
----
-
-# Поддержка TCP и UDP
-
-| SOCKS5 команда | Поддержка |
-| -------------- | --------- |
-| CONNECT        | Да        |
-| UDP ASSOCIATE  | Да        |
-| BIND           | Нет       |
-
-UDP реализован через `websocket-packet` (1 WS binary message = 1 UDP датаграмма).
-
----
-
-# Интеграция
-
-Можно использовать:
-
-* Браузер (SOCKS5 proxy)
-* Системный proxy
-* tun2socks
-* OpenWRT
-* Docker
-* systemd сервис
-
----
-
-# Пример systemd unit
-
-```
-[Unit]
-Description=Outline WS LB Client
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/outline-ws-lb -c /etc/outline/config.yaml
-Restart=always
-User=nobody
-
-[Install]
-WantedBy=multi-user.target
-```
+| Событие               | Реакция              |
+| --------------------- | -------------------- |
+| TCP dial error        | Немедленный failover |
+| UDP association error | Немедленный failover |
+| Active probe fail     | Сервер DOWN          |
+| Health-check fail     | Сервер DOWN          |
+| Сервер восстановился  | Возвращается в пул   |
 
 ---
 
 # Производительность
 
-* Минимальная задержка при failover
+* Failover без ожидания HC
+* Warm-standby устраняет WS latency
 * RTT-based routing
-* Нет активного “дёрганья”
-* Поддержка десятков upstream без деградации
+* Separate TCP/UDP logic
+* Adaptive probing
+
+Подходит для:
+
+* Desktop
+* Серверов
+* Docker
+* OpenWRT
+* Cloud failover
+* High-availability setups
 
 ---
 
 # Ограничения
 
-* Не TUN/VPN драйвер (использует SOCKS5)
-* Warm-standby реализован только для TCP
-* Не поддерживает QUIC (только WebSocket)
+* Не TUN/VPN (использует SOCKS5)
+* UDP probe использует DNS (можно заменить на echo-сервис)
+* Warm-standby только для TCP
 
 ---
 
-# Рекомендации
+# Рекомендуемые настройки
 
-* Использовать 2–3 сервера максимум
-* Не делать слишком маленький `healthcheck.interval`
-* Warm-standby 1–2 достаточно
-* sticky_ttl 30–120s оптимально
-
----
-
-# Отладка
-
-В логах:
-
-```
-[HC] server-1 UP (rtt=42ms)
-[HC] server-2 DOWN
-```
-
-При failover:
-
-```
-tcp tunnel err: ...
-switching to next fastest
-```
+| Параметр       | Рекомендация |
+| -------------- | ------------ |
+| sticky_ttl     | 30–120s      |
+| warm_standby_n | 1–2          |
+| min_interval   | 1–2s         |
+| max_interval   | 20–60s       |
+| backoff_factor | 1.5–2.0      |
 
 ---
 
-# Roadmap (опционально)
+# Возможные улучшения
 
-* HTTP API для статистики
-* Метрики Prometheus
-* Adaptive health-check
-* QUIC транспорт
-* Multi-path TCP
+* Prometheus exporter
+* Web dashboard
+* QUIC transport
+* Multipath routing
+* Latency histogram
+* Active bandwidth probe
 
 ---
 
 # Лицензия
 
-MIT / по выбору автора проекта.
-
----
-
-Если нужно — могу дополнительно написать:
-
-* Dockerfile
-* docker-compose
-* OpenWRT init script
-* встроенный web-dashboard
-* Prometheus exporter
-* или сделать из этого production-grade релиз с CI/CD
+GNU GENERAL PUBLIC LICENSE Version 3
