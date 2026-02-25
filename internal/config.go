@@ -16,6 +16,19 @@ type Config struct {
 	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
 }
 
+type HealthcheckConfig struct {
+	Interval         time.Duration `yaml:"interval"` // базовый (как раньше)
+	Timeout          time.Duration `yaml:"timeout"`
+	FailThreshold    int           `yaml:"fail_threshold"`
+	SuccessThreshold int           `yaml:"success_threshold"`
+
+	MinInterval   time.Duration `yaml:"min_interval"`   // минимум (для DOWN/подозрительных)
+	MaxInterval   time.Duration `yaml:"max_interval"`   // максимум (для стабильных UP)
+	Jitter        time.Duration `yaml:"jitter"`         // +- случайный сдвиг
+	BackoffFactor float64       `yaml:"backoff_factor"` // рост интервала на фейлах (например 1.6)
+	RTTScale      float64       `yaml:"rtt_scale"`      // добавка от RTT (например 0.25)
+}
+
 type SelectionConfig struct {
 	StickyTTL time.Duration `yaml:"sticky_ttl"`
 	Cooldown  time.Duration `yaml:"cooldown"`
@@ -23,13 +36,6 @@ type SelectionConfig struct {
 
 	WarmStandbyN        int           `yaml:"warm_standby_n"`        // сколько апстримов держать прогретыми (1-2)
 	WarmStandbyInterval time.Duration `yaml:"warm_standby_interval"` // как часто проверять/догревать
-}
-
-type HealthcheckConfig struct {
-	Interval         time.Duration `yaml:"interval"`
-	Timeout          time.Duration `yaml:"timeout"`
-	FailThreshold    int           `yaml:"fail_threshold"`
-	SuccessThreshold int           `yaml:"success_threshold"`
 }
 
 type UpstreamConfig struct {
@@ -66,6 +72,21 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Healthcheck.SuccessThreshold == 0 {
 		c.Healthcheck.SuccessThreshold = 1
+	}
+	if c.Healthcheck.MinInterval == 0 {
+		c.Healthcheck.MinInterval = 1 * time.Second
+	}
+	if c.Healthcheck.MaxInterval == 0 {
+		c.Healthcheck.MaxInterval = 30 * time.Second
+	}
+	if c.Healthcheck.Jitter == 0 {
+		c.Healthcheck.Jitter = 200 * time.Millisecond
+	}
+	if c.Healthcheck.BackoffFactor == 0 {
+		c.Healthcheck.BackoffFactor = 1.6
+	}
+	if c.Healthcheck.RTTScale == 0 {
+		c.Healthcheck.RTTScale = 0.25
 	}
 	if c.Selection.StickyTTL == 0 {
 		c.Selection.StickyTTL = 60 * time.Second

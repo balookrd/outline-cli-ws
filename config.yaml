@@ -10,6 +10,11 @@ selection:
 
 healthcheck:
   interval: "5s"
+  min_interval: "1s"
+  max_interval: "30s"
+  jitter: "200ms"
+  backoff_factor: 1.6
+  rtt_scale: 0.25
   timeout: "3s"
   fail_threshold: 2
   success_threshold: 1

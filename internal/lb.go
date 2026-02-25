@@ -20,6 +20,9 @@ type upstreamState struct {
 	lastError     error
 	lastCheckTime time.Time
 
+	nextHC  time.Time
+	hcEvery time.Duration
+
 	lastRTT time.Duration
 	rttEWMA time.Duration
 
@@ -166,10 +169,23 @@ func (lb *LoadBalancer) pickBestCandidate(pool []*upstreamState, now time.Time) 
 }
 
 func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
-	// initial check immediately
-	lb.checkAllOnce(ctx)
+	// init: сразу запланируем всем "прямо сейчас"
+	lb.mu.Lock()
+	pool := append([]*upstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
 
-	t := time.NewTicker(lb.hc.Interval)
+	now := time.Now()
+	for _, s := range pool {
+		s.mu.Lock()
+		s.nextHC = now
+		if s.hcEvery == 0 {
+			s.hcEvery = lb.hc.Interval
+		}
+		s.mu.Unlock()
+	}
+
+	// scheduler loop
+	t := time.NewTicker(200 * time.Millisecond)
 	defer t.Stop()
 
 	for {
@@ -177,8 +193,28 @@ func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			lb.checkAllOnce(ctx)
+			lb.runDueChecks(ctx)
 		}
+	}
+}
+
+func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
+	lb.mu.Lock()
+	pool := append([]*upstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
+
+	now := time.Now()
+
+	for _, st := range pool {
+		st.mu.Lock()
+		due := !st.nextHC.After(now)
+		st.mu.Unlock()
+		if !due {
+			continue
+		}
+
+		// запускаем проверку в goroutine, чтобы не блокировать планировщик
+		go lb.checkOne(ctx, st)
 	}
 }
 
@@ -255,6 +291,10 @@ func (lb *LoadBalancer) ReportFailure(s *upstreamState, err error) {
 	if s.failCount >= lb.hc.FailThreshold {
 		s.healthy = false
 	}
+
+	// после установки cooldownUntil / failCount
+	s.hcEvery = lb.hc.MinInterval
+	s.nextHC = time.Now().Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
 	s.mu.Unlock()
 
 	// если это был текущий sticky — сбрасываем sticky, чтобы следующий Pick() сделал failover
@@ -363,4 +403,99 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (lb *LoadBalancer) checkOne(parent context.Context, st *upstreamState) {
+	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	defer cancel()
+
+	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	st.lastCheckTime = time.Now()
+
+	if err != nil {
+		st.lastError = err
+		st.successCount = 0
+		st.failCount++
+
+		if st.failCount >= lb.hc.FailThreshold {
+			st.healthy = false
+		}
+
+		// adaptive: DOWN/ошибки => чаще, но с backoff (чтобы не DDOS’ить)
+		st.hcEvery = lb.nextIntervalOnFailure(st)
+		st.nextHC = time.Now().Add(applyJitter(st.hcEvery, lb.hc.Jitter))
+		return
+	}
+
+	// success
+	st.lastError = nil
+	st.failCount = 0
+	st.successCount++
+
+	st.lastRTT = rtt
+	if st.rttEWMA == 0 {
+		st.rttEWMA = rtt
+	} else {
+		st.rttEWMA = time.Duration(float64(st.rttEWMA)*0.8 + float64(rtt)*0.2)
+	}
+
+	if st.successCount >= lb.hc.SuccessThreshold {
+		st.healthy = true
+		// если был cooldown — снимем (чтобы вернуть в пул быстрее)
+		st.cooldownUntil = time.Time{}
+	}
+
+	// adaptive: стабильный UP => реже; высокий RTT => чуть чаще (чтобы реагировать)
+	st.hcEvery = lb.nextIntervalOnSuccess(st)
+	st.nextHC = time.Now().Add(applyJitter(st.hcEvery, lb.hc.Jitter))
+}
+
+func (lb *LoadBalancer) nextIntervalOnFailure(st *upstreamState) time.Duration {
+	// стартуем с min_interval; на каждом фейле растём backoff’ом до max_interval
+	base := lb.hc.MinInterval
+	if st.hcEvery > 0 {
+		base = st.hcEvery
+	}
+	// если был UP и внезапно упал — быстро перепроверим
+	if st.healthy {
+		base = lb.hc.MinInterval
+	}
+	next := time.Duration(float64(base) * lb.hc.BackoffFactor)
+	if next < lb.hc.MinInterval {
+		next = lb.hc.MinInterval
+	}
+	if next > lb.hc.MaxInterval {
+		next = lb.hc.MaxInterval
+	}
+	return next
+}
+
+func (lb *LoadBalancer) nextIntervalOnSuccess(st *upstreamState) time.Duration {
+	// Чем стабильнее UP, тем ближе к max_interval.
+	// Но если RTT растёт — делаем чуть чаще (контроль качества).
+	// Идея: interval = clamp( interval*1.2 + RTT*rtt_scale, min..max )
+	base := st.hcEvery
+	if base == 0 {
+		base = lb.hc.Interval
+	}
+
+	// ускоряем проверки для "новичка" (только что поднялся)
+	if st.successCount < 3 {
+		base = minDur(base, lb.hc.Interval)
+	}
+
+	add := time.Duration(float64(st.rttEWMA) * lb.hc.RTTScale)
+	next := time.Duration(float64(base)*1.2) + add
+
+	if next < lb.hc.MinInterval {
+		next = lb.hc.MinInterval
+	}
+	if next > lb.hc.MaxInterval {
+		next = lb.hc.MaxInterval
+	}
+	return next
 }
