@@ -9,7 +9,7 @@ import (
 
 // AcquireTCPWS отдаёт прогретый WS (если есть) или делает Dial.
 // Если взяли прогретый — слот освобождается и будет догрет снова.
-func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *upstreamState) (*websocket.Conn, error) {
+func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *UpstreamState) (*websocket.Conn, error) {
 	// 1) попробуем взять прогретый
 	up.standbyMu.Lock()
 	c := up.standbyTCP
@@ -25,7 +25,7 @@ func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *upstreamState) (*w
 }
 
 // EnsureStandbyTCP гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).
-func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *upstreamState) {
+func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *UpstreamState) {
 	up.mu.Lock()
 	ok := up.tcp.healthy && time.Now().After(up.tcpCooldownUntil)
 	up.mu.Unlock()

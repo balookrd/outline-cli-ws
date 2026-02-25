@@ -25,7 +25,7 @@ type hcState struct {
 	hcEvery time.Duration
 }
 
-type upstreamState struct {
+type UpstreamState struct {
 	cfg UpstreamConfig
 	mu  sync.Mutex
 
@@ -49,16 +49,16 @@ type LoadBalancer struct {
 	fwmark uint32
 
 	mu   sync.Mutex
-	pool []*upstreamState
+	pool []*UpstreamState
 
-	current     *upstreamState
+	current     *UpstreamState
 	stickyUntil time.Time
 }
 
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
-	pool := make([]*upstreamState, 0, len(ups))
+	pool := make([]*UpstreamState, 0, len(ups))
 	for _, u := range ups {
-		s := &upstreamState{cfg: u}
+		s := &UpstreamState{cfg: u}
 		s.tcp.healthy = false
 		s.udp.healthy = false
 		pool = append(pool, s)
@@ -66,19 +66,19 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 	return &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
 }
 
-func (lb *LoadBalancer) PickTCP() (*upstreamState, error) {
+func (lb *LoadBalancer) PickTCP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(true)
 }
 
-func (lb *LoadBalancer) PickUDP() (*upstreamState, error) {
+func (lb *LoadBalancer) PickUDP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(false)
 }
 
-func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*upstreamState, error) {
+func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 	now := time.Now()
 
 	lb.mu.Lock()
-	pool := append([]*upstreamState(nil), lb.pool...)
+	pool := append([]*UpstreamState(nil), lb.pool...)
 	// sticky делаем только для TCP (как и warm-standby), для UDP можно тоже, но обычно не надо
 	cur := lb.current
 	stickyUntil := lb.stickyUntil
@@ -127,8 +127,8 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*upstreamState, error) {
 	return best, nil
 }
 
-func (lb *LoadBalancer) pickBestCandidateByEndpoint(pool []*upstreamState, now time.Time, isTCP bool) (*upstreamState, time.Duration, error) {
-	var best *upstreamState
+func (lb *LoadBalancer) pickBestCandidateByEndpoint(pool []*UpstreamState, now time.Time, isTCP bool) (*UpstreamState, time.Duration, error) {
+	var best *UpstreamState
 	bestScore := float64(1e18)
 	bestRTT := time.Duration(0)
 
@@ -188,7 +188,7 @@ func (lb *LoadBalancer) pickBestCandidateByEndpoint(pool []*upstreamState, now t
 func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 	// init: сразу запланируем всем "прямо сейчас"
 	lb.mu.Lock()
-	pool := append([]*upstreamState(nil), lb.pool...)
+	pool := append([]*UpstreamState(nil), lb.pool...)
 	lb.mu.Unlock()
 
 	now := time.Now()
@@ -224,7 +224,7 @@ func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 
 func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
 	lb.mu.Lock()
-	pool := append([]*upstreamState(nil), lb.pool...)
+	pool := append([]*UpstreamState(nil), lb.pool...)
 	lb.mu.Unlock()
 
 	now := time.Now()
@@ -244,7 +244,7 @@ func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
 	}
 }
 
-func (lb *LoadBalancer) ReportTCPFailure(s *upstreamState, err error) {
+func (lb *LoadBalancer) ReportTCPFailure(s *UpstreamState, err error) {
 	if s == nil {
 		return
 	}
@@ -270,7 +270,7 @@ func (lb *LoadBalancer) ReportTCPFailure(s *upstreamState, err error) {
 	lb.mu.Unlock()
 }
 
-func (lb *LoadBalancer) ReportUDPFailure(s *upstreamState, err error) {
+func (lb *LoadBalancer) ReportUDPFailure(s *UpstreamState, err error) {
 	if s == nil {
 		return
 	}
@@ -289,16 +289,16 @@ func (lb *LoadBalancer) ReportUDPFailure(s *upstreamState, err error) {
 	s.mu.Unlock()
 }
 
-func (lb *LoadBalancer) pickTopN(now time.Time, n int) []*upstreamState {
+func (lb *LoadBalancer) pickTopN(now time.Time, n int) []*UpstreamState {
 	lb.mu.Lock()
-	pool := append([]*upstreamState(nil), lb.pool...)
+	pool := append([]*UpstreamState(nil), lb.pool...)
 	lb.mu.Unlock()
 
-	out := make([]*upstreamState, 0, n)
-	used := map[*upstreamState]bool{}
+	out := make([]*UpstreamState, 0, n)
+	used := map[*UpstreamState]bool{}
 
 	for len(out) < n {
-		var best *upstreamState
+		var best *UpstreamState
 		bestScore := float64(1e18)
 
 		for _, s := range pool {
@@ -363,7 +363,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 		case <-ctx.Done():
 			// закрыть все standby
 			lb.mu.Lock()
-			pool := append([]*upstreamState(nil), lb.pool...)
+			pool := append([]*UpstreamState(nil), lb.pool...)
 			lb.mu.Unlock()
 			for _, u := range pool {
 				u.standbyMu.Lock()
@@ -389,7 +389,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	}
 }
 
-func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *upstreamState) {
+func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
 	defer cancel()
 
@@ -416,7 +416,7 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *upstreamState) {
 	}
 }
 
-func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *upstreamState) {
+func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
 	defer cancel()
 
