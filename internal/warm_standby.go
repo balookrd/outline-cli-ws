@@ -26,10 +26,8 @@ func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *upstreamState) (*w
 
 // EnsureStandbyTCP: гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).
 func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *upstreamState) {
-	now := time.Now()
-
 	up.mu.Lock()
-	ok := up.healthy && now.After(up.cooldownUntil)
+	ok := up.tcp.healthy && time.Now().After(up.tcpCooldownUntil)
 	up.mu.Unlock()
 	if !ok {
 		// если апстрим не ок — сбросим прогретый конн, если был

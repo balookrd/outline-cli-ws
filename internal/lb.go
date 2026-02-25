@@ -10,24 +10,34 @@ import (
 	"nhooyr.io/websocket"
 )
 
-type upstreamState struct {
-	cfg UpstreamConfig
+type hcState struct {
+	healthy      bool
+	failCount    int
+	successCount int
 
-	mu            sync.Mutex
-	healthy       bool
-	failCount     int
-	successCount  int
 	lastError     error
 	lastCheckTime time.Time
-
-	nextHC  time.Time
-	hcEvery time.Duration
 
 	lastRTT time.Duration
 	rttEWMA time.Duration
 
-	cooldownUntil time.Time
+	nextHC  time.Time
+	hcEvery time.Duration
+}
 
+type upstreamState struct {
+	cfg UpstreamConfig
+	mu  sync.Mutex
+
+	// separate HC
+	tcp hcState
+	udp hcState
+
+	// cooldown (separate, optional but useful)
+	tcpCooldownUntil time.Time
+	udpCooldownUntil time.Time
+
+	// warm-standby TCP
 	standbyMu  sync.Mutex
 	standbyTCP *websocket.Conn
 }
@@ -46,49 +56,56 @@ type LoadBalancer struct {
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig) *LoadBalancer {
 	pool := make([]*upstreamState, 0, len(ups))
 	for _, u := range ups {
-		s := &upstreamState{cfg: u, healthy: false}
+		s := &upstreamState{cfg: u}
+		s.tcp.healthy = false
+		s.udp.healthy = false
 		pool = append(pool, s)
 	}
 	return &LoadBalancer{hc: hc, sel: sel, pool: pool}
 }
 
-func (lb *LoadBalancer) Pick() (*upstreamState, error) {
+func (lb *LoadBalancer) PickTCP() (*upstreamState, error) {
+	return lb.pickByEndpoint(true)
+}
+
+func (lb *LoadBalancer) PickUDP() (*upstreamState, error) {
+	return lb.pickByEndpoint(false)
+}
+
+func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*upstreamState, error) {
 	now := time.Now()
 
 	lb.mu.Lock()
+	pool := append([]*upstreamState(nil), lb.pool...)
+	// sticky делаем только для TCP (как и warm-standby), для UDP можно тоже, но обычно не надо
 	cur := lb.current
 	stickyUntil := lb.stickyUntil
-	pool := append([]*upstreamState(nil), lb.pool...)
 	lb.mu.Unlock()
 
-	// 1) Если есть текущий и он ещё "липкий" — используем его, пока он здоров и не в cooldown
-	if cur != nil && now.Before(stickyUntil) {
+	// sticky только TCP
+	if isTCP && cur != nil && now.Before(stickyUntil) {
 		cur.mu.Lock()
-		ok := cur.healthy && now.After(cur.cooldownUntil)
+		ok := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
 		cur.mu.Unlock()
 		if ok {
 			return cur, nil
 		}
-		// иначе failover немедленно
 	}
 
-	// 2) Выбираем лучшего кандидата
-	best, bestRTT, err := lb.pickBestCandidate(pool, now)
+	best, bestRTT, err := lb.pickBestCandidateByEndpoint(pool, now, isTCP)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3) Hysteresis: если текущий здоров, не переключаемся без заметного выигрыша RTT
-	if cur != nil {
+	// hysteresis + sticky тоже только TCP
+	if isTCP && cur != nil {
 		cur.mu.Lock()
-		curOK := cur.healthy && now.After(cur.cooldownUntil)
-		curRTT := cur.rttEWMA
+		curOK := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
+		curRTT := cur.tcp.rttEWMA
 		cur.mu.Unlock()
 
 		if curOK && curRTT > 0 && bestRTT > 0 {
-			// переключаемся только если новый лучше минимум на MinSwitch
 			if curRTT-bestRTT < lb.sel.MinSwitch {
-				// продлеваем sticky на текущем
 				lb.mu.Lock()
 				lb.current = cur
 				lb.stickyUntil = now.Add(lb.sel.StickyTTL)
@@ -98,67 +115,65 @@ func (lb *LoadBalancer) Pick() (*upstreamState, error) {
 		}
 	}
 
-	// 4) Фиксируем нового fastest и делаем его sticky
-	lb.mu.Lock()
-	lb.current = best
-	lb.stickyUntil = now.Add(lb.sel.StickyTTL)
-	lb.mu.Unlock()
+	if isTCP {
+		lb.mu.Lock()
+		lb.current = best
+		lb.stickyUntil = now.Add(lb.sel.StickyTTL)
+		lb.mu.Unlock()
+	}
 
 	return best, nil
 }
 
-func (lb *LoadBalancer) pickBestCandidate(pool []*upstreamState, now time.Time) (*upstreamState, time.Duration, error) {
+func (lb *LoadBalancer) pickBestCandidateByEndpoint(pool []*upstreamState, now time.Time, isTCP bool) (*upstreamState, time.Duration, error) {
 	var best *upstreamState
 	bestScore := float64(1e18)
 	bestRTT := time.Duration(0)
 
 	for _, s := range pool {
 		s.mu.Lock()
-		healthy := s.healthy
-		rtt := s.rttEWMA
-		cooldownUntil := s.cooldownUntil
-		fail := s.failCount
-		lastErr := s.lastError
-		lastCheck := s.lastCheckTime
+		var h hcState
+		var cooldownUntil time.Time
+		if isTCP {
+			h = s.tcp
+			cooldownUntil = s.tcpCooldownUntil
+		} else {
+			h = s.udp
+			cooldownUntil = s.udpCooldownUntil
+		}
 		w := s.cfg.Weight
 		s.mu.Unlock()
 
-		if !healthy {
-			continue
-		}
-		if now.Before(cooldownUntil) {
+		if !h.healthy || now.Before(cooldownUntil) {
 			continue
 		}
 
-		// base RTT
-		base := float64(rtt.Milliseconds())
+		base := float64(h.rttEWMA.Milliseconds())
 		if base <= 0 {
-			base = 1000 // если не меряли — не даём стать best
+			base = 1000
 		}
 
-		// penalties
-		staleness := now.Sub(lastCheck)
+		staleness := now.Sub(h.lastCheckTime)
 		stalePenalty := 0.0
 		if staleness > 2*lb.hc.Interval {
 			stalePenalty = float64(staleness.Milliseconds()) * 0.2
 		}
-		failPenalty := float64(fail) * 500
+
+		failPenalty := float64(h.failCount) * 500
 		errPenalty := 0.0
-		if lastErr != nil {
+		if h.lastError != nil {
 			errPenalty = 500
 		}
 
 		if w <= 0 {
 			w = 1
 		}
-		weightFactor := 1.0 / float64(w)
-
-		score := (base + stalePenalty + failPenalty + errPenalty) * weightFactor
+		score := (base + stalePenalty + failPenalty + errPenalty) * (1.0 / float64(w))
 
 		if score < bestScore {
 			bestScore = score
 			best = s
-			bestRTT = rtt
+			bestRTT = h.rttEWMA
 		}
 	}
 
@@ -177,10 +192,17 @@ func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 	now := time.Now()
 	for _, s := range pool {
 		s.mu.Lock()
-		s.nextHC = now
-		if s.hcEvery == 0 {
-			s.hcEvery = lb.hc.Interval
+
+		s.tcp.nextHC = now
+		s.udp.nextHC = now
+
+		if s.tcp.hcEvery == 0 {
+			s.tcp.hcEvery = lb.hc.Interval
 		}
+		if s.udp.hcEvery == 0 {
+			s.udp.hcEvery = lb.hc.Interval
+		}
+
 		s.mu.Unlock()
 	}
 
@@ -207,45 +229,62 @@ func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
 
 	for _, st := range pool {
 		st.mu.Lock()
-		due := !st.nextHC.After(now)
+		tcpDue := !st.tcp.nextHC.After(now)
+		udpDue := !st.udp.nextHC.After(now)
 		st.mu.Unlock()
-		if !due {
-			continue
-		}
 
-		// запускаем проверку в goroutine, чтобы не блокировать планировщик
-		go lb.checkOne(ctx, st)
+		if tcpDue {
+			go lb.checkOneTCP(ctx, st)
+		}
+		if udpDue {
+			go lb.checkOneUDP(ctx, st)
+		}
 	}
 }
 
-func (lb *LoadBalancer) ReportFailure(s *upstreamState, err error) {
+func (lb *LoadBalancer) ReportTCPFailure(s *upstreamState, err error) {
 	if s == nil {
 		return
 	}
 	now := time.Now()
 
 	s.mu.Lock()
-	s.lastError = err
-	s.failCount++
-	// немедленный cooldown, чтобы не выбирать его снова прямо сейчас
-	s.cooldownUntil = now.Add(lb.sel.Cooldown)
+	s.tcp.lastError = err
+	s.tcp.failCount++
+	s.tcp.successCount = 0
+	s.tcp.healthy = false
+	s.tcpCooldownUntil = now.Add(lb.sel.Cooldown)
 
-	// если накопили фейлы — считаем down (до следующего успешного HC)
-	if s.failCount >= lb.hc.FailThreshold {
-		s.healthy = false
-	}
-
-	// после установки cooldownUntil / failCount
-	s.hcEvery = lb.hc.MinInterval
-	s.nextHC = time.Now().Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
+	// ускоряем TCP HC
+	s.tcp.hcEvery = lb.hc.MinInterval
+	s.tcp.nextHC = now.Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
 	s.mu.Unlock()
 
-	// если это был текущий sticky — сбрасываем sticky, чтобы следующий Pick() сделал failover
+	// сбрасываем sticky
 	lb.mu.Lock()
 	if lb.current == s {
 		lb.stickyUntil = time.Time{}
 	}
 	lb.mu.Unlock()
+}
+
+func (lb *LoadBalancer) ReportUDPFailure(s *upstreamState, err error) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+
+	s.mu.Lock()
+	s.udp.lastError = err
+	s.udp.failCount++
+	s.udp.successCount = 0
+	s.udp.healthy = false
+	s.udpCooldownUntil = now.Add(lb.sel.Cooldown)
+
+	// ускоряем UDP HC
+	s.udp.hcEvery = lb.hc.MinInterval
+	s.udp.nextHC = now.Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
+	s.mu.Unlock()
 }
 
 func (lb *LoadBalancer) pickTopN(now time.Time, n int) []*upstreamState {
@@ -265,12 +304,12 @@ func (lb *LoadBalancer) pickTopN(now time.Time, n int) []*upstreamState {
 				continue
 			}
 			s.mu.Lock()
-			healthy := s.healthy
-			rtt := s.rttEWMA
-			cooldownUntil := s.cooldownUntil
-			fail := s.failCount
-			lastErr := s.lastError
-			lastCheck := s.lastCheckTime
+			healthy := s.tcp.healthy
+			rtt := s.tcp.rttEWMA
+			cooldownUntil := s.tcpCooldownUntil
+			fail := s.tcp.failCount
+			lastErr := s.tcp.lastError
+			lastCheck := s.tcp.lastCheckTime
 			w := s.cfg.Weight
 			s.mu.Unlock()
 
@@ -348,7 +387,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	}
 }
 
-func (lb *LoadBalancer) checkOne(parent context.Context, st *upstreamState) {
+func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *upstreamState) {
 	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
 	defer cancel()
 
@@ -357,60 +396,81 @@ func (lb *LoadBalancer) checkOne(parent context.Context, st *upstreamState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	st.lastCheckTime = time.Now()
+	lb.applyHCResult(&st.tcp, err, rtt, st.cfg.Name, "tcp")
+
+	// если TCP поднялся — можно снять TCP cooldown
+	if st.tcp.healthy {
+		st.tcpCooldownUntil = time.Time{}
+	}
+}
+
+func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *upstreamState) {
+	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	defer cancel()
+
+	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	lb.applyHCResult(&st.udp, err, rtt, st.cfg.Name, "udp")
+
+	// если UDP поднялся — можно снять UDP cooldown
+	if st.udp.healthy {
+		st.udpCooldownUntil = time.Time{}
+	}
+}
+
+func (lb *LoadBalancer) applyHCResult(h *hcState, err error, rtt time.Duration,
+	name string, proto string) {
+	h.lastCheckTime = time.Now()
 
 	if err != nil {
-		st.lastError = err
-		st.successCount = 0
-		st.failCount++
+		h.lastError = err
+		h.successCount = 0
+		h.failCount++
 
-		if st.failCount >= lb.hc.FailThreshold {
-			if st.healthy {
-				log.Printf("[HC] %s DOWN: %v", st.cfg.Name, err)
+		if h.failCount >= lb.hc.FailThreshold {
+			if h.healthy {
+				log.Printf("[HC|%s] %s DOWN: %v", proto, name, err)
 			}
-			st.healthy = false
+			h.healthy = false
 		}
 
-		// adaptive: DOWN/ошибки => чаще, но с backoff (чтобы не DDOS’ить)
-		st.hcEvery = lb.nextIntervalOnFailure(st)
-		st.nextHC = time.Now().Add(applyJitter(st.hcEvery, lb.hc.Jitter))
+		h.hcEvery = lb.nextIntervalOnFailure(*h)
+		h.nextHC = time.Now().Add(applyJitter(h.hcEvery, lb.hc.Jitter))
 		return
 	}
 
 	// success
-	st.lastError = nil
-	st.failCount = 0
-	st.successCount++
+	h.lastError = nil
+	h.failCount = 0
+	h.successCount++
 
-	st.lastRTT = rtt
-	if st.rttEWMA == 0 {
-		st.rttEWMA = rtt
+	h.lastRTT = rtt
+	if h.rttEWMA == 0 {
+		h.rttEWMA = rtt
 	} else {
-		st.rttEWMA = time.Duration(float64(st.rttEWMA)*0.8 + float64(rtt)*0.2)
+		h.rttEWMA = time.Duration(float64(h.rttEWMA)*0.8 + float64(rtt)*0.2)
 	}
 
-	if st.successCount >= lb.hc.SuccessThreshold {
-		if !st.healthy {
-			log.Printf("[HC] %s UP (rtt=%s)", st.cfg.Name, st.rttEWMA)
+	if h.successCount >= lb.hc.SuccessThreshold {
+		if !h.healthy {
+			log.Printf("[HC|%s] %s UP (rtt=%s)", proto, name, h.rttEWMA)
 		}
-		st.healthy = true
-		// если был cooldown — снимем (чтобы вернуть в пул быстрее)
-		st.cooldownUntil = time.Time{}
+		h.healthy = true
 	}
 
-	// adaptive: стабильный UP => реже; высокий RTT => чуть чаще (чтобы реагировать)
-	st.hcEvery = lb.nextIntervalOnSuccess(st)
-	st.nextHC = time.Now().Add(applyJitter(st.hcEvery, lb.hc.Jitter))
+	h.hcEvery = lb.nextIntervalOnSuccess(*h)
+	h.nextHC = time.Now().Add(applyJitter(h.hcEvery, lb.hc.Jitter))
 }
 
-func (lb *LoadBalancer) nextIntervalOnFailure(st *upstreamState) time.Duration {
-	// стартуем с min_interval; на каждом фейле растём backoff’ом до max_interval
+func (lb *LoadBalancer) nextIntervalOnFailure(h hcState) time.Duration {
 	base := lb.hc.MinInterval
-	if st.hcEvery > 0 {
-		base = st.hcEvery
+	if h.hcEvery > 0 {
+		base = h.hcEvery
 	}
-	// если был UP и внезапно упал — быстро перепроверим
-	if st.healthy {
+	if h.healthy {
 		base = lb.hc.MinInterval
 	}
 	next := time.Duration(float64(base) * lb.hc.BackoffFactor)
@@ -423,21 +483,15 @@ func (lb *LoadBalancer) nextIntervalOnFailure(st *upstreamState) time.Duration {
 	return next
 }
 
-func (lb *LoadBalancer) nextIntervalOnSuccess(st *upstreamState) time.Duration {
-	// Чем стабильнее UP, тем ближе к max_interval.
-	// Но если RTT растёт — делаем чуть чаще (контроль качества).
-	// Идея: interval = clamp( interval*1.2 + RTT*rtt_scale, min..max )
-	base := st.hcEvery
+func (lb *LoadBalancer) nextIntervalOnSuccess(h hcState) time.Duration {
+	base := h.hcEvery
 	if base == 0 {
 		base = lb.hc.Interval
 	}
-
-	// ускоряем проверки для "новичка" (только что поднялся)
-	if st.successCount < 3 {
+	if h.successCount < 3 {
 		base = minDur(base, lb.hc.Interval)
 	}
-
-	add := time.Duration(float64(st.rttEWMA) * lb.hc.RTTScale)
+	add := time.Duration(float64(h.rttEWMA) * lb.hc.RTTScale)
 	next := time.Duration(float64(base)*1.2) + add
 
 	if next < lb.hc.MinInterval {

@@ -44,9 +44,9 @@ func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 }
 
 func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string) {
-	up, err := s.LB.Pick()
+	up, err := s.LB.PickTCP()
 	if err != nil {
-		s.LB.ReportFailure(up, err)
+		s.LB.ReportTCPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0") // Host unreachable
 		return
 	}
@@ -54,7 +54,7 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	// Open WS stream to upstream TCP endpoint
 	wsc, err := s.LB.AcquireTCPWS(ctx, up)
 	if err != nil {
-		s.LB.ReportFailure(up, err)
+		s.LB.ReportTCPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
 		return
 	}
@@ -68,22 +68,22 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	// Tunnel: local TCP <-> Shadowsocks-over-WS
 	err = ProxyTCPOverOutlineWS(ctx, c, wsc, up.cfg, dst)
 	if err != nil && !errors.Is(err, io.EOF) {
-		s.LB.ReportFailure(up, err)
+		s.LB.ReportTCPFailure(up, err)
 		log.Printf("tcp tunnel err: %v", err)
 	}
 }
 
 func (s *Socks5Server) handleUDPAssociate(ctx context.Context, c net.Conn) {
-	up, err := s.LB.Pick()
+	up, err := s.LB.PickUDP()
 	if err != nil {
-		s.LB.ReportFailure(up, err)
+		s.LB.ReportUDPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
 		return
 	}
 
 	assoc, err := NewUDPAssociation(ctx, up.cfg)
 	if err != nil {
-		s.LB.ReportFailure(up, err)
+		s.LB.ReportUDPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
 		return
 	}
