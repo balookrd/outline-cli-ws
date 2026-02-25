@@ -218,63 +218,6 @@ func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
 	}
 }
 
-func (lb *LoadBalancer) checkAllOnce(ctx context.Context) {
-	lb.mu.Lock()
-	pool := append([]*upstreamState(nil), lb.pool...)
-	lb.mu.Unlock()
-
-	for _, s := range pool {
-		go func(st *upstreamState) {
-			cctx, cancel := context.WithTimeout(ctx, lb.hc.Timeout)
-			defer cancel()
-
-			rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS)
-			st.mu.Lock()
-			defer st.mu.Unlock()
-
-			st.lastCheckTime = time.Now()
-
-			if err != nil {
-				st.lastError = err
-				st.successCount = 0
-				st.failCount++
-				// можно слегка "портить" rttEWMA на фейлах:
-				// st.rttEWMA = st.rttEWMA + 200*time.Millisecond
-				if st.failCount >= lb.hc.FailThreshold {
-					if st.healthy {
-						log.Printf("[HC] %s DOWN: %v", st.cfg.Name, err)
-					}
-					st.healthy = false
-				}
-				return
-			}
-
-			// success
-			st.lastError = nil
-			st.failCount = 0
-			st.successCount++
-
-			st.lastRTT = rtt
-			if st.rttEWMA == 0 {
-				st.rttEWMA = rtt
-			} else {
-				// EWMA: 80% старое, 20% новое
-				st.rttEWMA = time.Duration(float64(st.rttEWMA)*0.8 + float64(rtt)*0.2)
-			}
-
-			if st.successCount >= lb.hc.SuccessThreshold {
-				if !st.healthy {
-					log.Printf("[HC] %s UP (rtt=%s)", st.cfg.Name, st.rttEWMA)
-				}
-				st.healthy = true
-				st.failCount = 0
-				st.lastError = nil
-				st.cooldownUntil = time.Time{}
-			}
-		}(s)
-	}
-}
-
 func (lb *LoadBalancer) ReportFailure(s *upstreamState, err error) {
 	if s == nil {
 		return
@@ -422,6 +365,9 @@ func (lb *LoadBalancer) checkOne(parent context.Context, st *upstreamState) {
 		st.failCount++
 
 		if st.failCount >= lb.hc.FailThreshold {
+			if st.healthy {
+				log.Printf("[HC] %s DOWN: %v", st.cfg.Name, err)
+			}
 			st.healthy = false
 		}
 
@@ -444,6 +390,9 @@ func (lb *LoadBalancer) checkOne(parent context.Context, st *upstreamState) {
 	}
 
 	if st.successCount >= lb.hc.SuccessThreshold {
+		if !st.healthy {
+			log.Printf("[HC] %s UP (rtt=%s)", st.cfg.Name, st.rttEWMA)
+		}
 		st.healthy = true
 		// если был cooldown — снимем (чтобы вернуть в пул быстрее)
 		st.cooldownUntil = time.Time{}
