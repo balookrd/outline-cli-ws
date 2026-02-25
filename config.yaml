@@ -1,6 +1,15 @@
 listen:
   socks5: "127.0.0.1:1080"
 
+fwmark: 0
+
+tun:
+  enable: false
+  device: "tun0"
+  mtu: 1500
+  interface: "lo0"
+  loglevel: "info"
+
 selection:
   sticky_ttl: "60s"
   cooldown: "20s"
@@ -27,8 +36,6 @@ probe:
   udp_target: "1.1.1.1:53"
   dns_name: "example.com"
   dns_type: "AAAA"
-
-fwmark: 0
 
 upstreams:
   - name: "s1"

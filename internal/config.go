@@ -12,11 +12,21 @@ type Config struct {
 	Listen struct {
 		SOCKS5 string `yaml:"socks5"`
 	} `yaml:"listen"`
+	Tun         TunConfig         `yaml:"tun"`
 	Healthcheck HealthcheckConfig `yaml:"healthcheck"`
 	Selection   SelectionConfig   `yaml:"selection"`
 	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
 	Probe       ProbeConfig       `yaml:"probe"`
 	Fwmark      uint32            `yaml:"fwmark"` // 0 = disabled
+}
+
+type TunConfig struct {
+	Enable   bool   `yaml:"enable"`
+	Auto     bool   `yaml:"auto"` // по умолчанию false
+	Device   string `yaml:"device"`
+	MTU      int    `yaml:"mtu"`
+	OutIface string `yaml:"interface"`
+	LogLevel string `yaml:"loglevel"`
 }
 
 type HealthcheckConfig struct {
@@ -75,6 +85,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Listen.SOCKS5 == "" {
 		c.Listen.SOCKS5 = "127.0.0.1:1080"
+	}
+	if c.Tun.MTU == 0 {
+		c.Tun.MTU = 1500
+	}
+	if c.Tun.LogLevel == "" {
+		c.Tun.LogLevel = "info"
 	}
 	if c.Healthcheck.Interval == 0 {
 		c.Healthcheck.Interval = 5 * time.Second

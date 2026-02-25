@@ -51,6 +51,12 @@ func main() {
 		_ = ln.Close()
 	}()
 
+	stopTun, err := internal.StartTun2SocksEngine(ctx, cfg.Tun, cfg.Listen.SOCKS5, cfg.Fwmark)
+	if err != nil {
+		log.Fatalf("tun: %v", err)
+	}
+	defer stopTun()
+
 	for {
 		c, err := ln.Accept()
 		if err != nil {
