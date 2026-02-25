@@ -66,7 +66,7 @@ func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string) (tim
 
 // ---- UDP Quality Probe: DNS query ----
 
-func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, name string) (time.Duration, error) {
+func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, name string, dnstype string) (time.Duration, error) {
 	start := time.Now()
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
@@ -87,7 +87,11 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, n
 
 	// Build DNS query (A)
 	txid := uint16(time.Now().UnixNano()) // not crypto, fine for probe
-	q := buildDNSQuery(txid, name)
+	var qtype uint16 = 1                  // A
+	if strings.ToUpper(dnstype) == "AAAA" {
+		qtype = 28
+	}
+	q := buildDNSQuery(txid, name, qtype)
 
 	// SS UDP plaintext = [socks addr][dns query]
 	dst := socks.ParseAddr(dnsServer)
@@ -128,13 +132,12 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, n
 	}
 }
 
-func buildDNSQuery(txid uint16, name string) []byte {
+func buildDNSQuery(txid uint16, name string, qtype uint16) []byte {
 	// DNS header: ID, flags(0x0100), QD=1
 	b := make([]byte, 12)
 	binary.BigEndian.PutUint16(b[0:2], txid)
 	binary.BigEndian.PutUint16(b[2:4], 0x0100)
 	binary.BigEndian.PutUint16(b[4:6], 1)
-
 	// QNAME
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
 	for _, lab := range labels {
@@ -145,8 +148,7 @@ func buildDNSQuery(txid uint16, name string) []byte {
 		b = append(b, []byte(lab)...)
 	}
 	b = append(b, 0x00)
-
-	// QTYPE=A(1), QCLASS=IN(1)
-	b = append(b, 0x00, 0x01, 0x00, 0x01)
+	// QTYPE, QCLASS=IN
+	b = append(b, byte(qtype>>8), byte(qtype), 0x00, 0x01)
 	return b
 }

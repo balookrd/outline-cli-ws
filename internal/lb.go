@@ -422,7 +422,7 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *upstreamState) {
 	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS)
 	if err == nil && lb.probe.EnableUDP {
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName)
+		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType)
 		pcancel()
 		if perr != nil {
 			err = perr

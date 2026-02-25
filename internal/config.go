@@ -2,6 +2,7 @@ package internal
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -59,6 +60,7 @@ type ProbeConfig struct {
 	TCPTarget string `yaml:"tcp_target"` // e.g. "example.com:80"
 	UDPTarget string `yaml:"udp_target"` // e.g. "1.1.1.1:53"
 	DNSName   string `yaml:"dns_name"`   // e.g. "example.com"
+	DNSType   string `yaml:"dns_type"`   // "A" или "AAAA"
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -124,8 +126,14 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Probe.UDPTarget == "" {
 		c.Probe.UDPTarget = "1.1.1.1:53"
 	}
+	if strings.Contains(c.Probe.UDPTarget, "::") {
+		c.Probe.UDPTarget = "[2606:4700:4700::1111]:53"
+	}
 	if c.Probe.DNSName == "" {
 		c.Probe.DNSName = "example.com"
+	}
+	if c.Probe.DNSType == "" {
+		c.Probe.DNSType = "A"
 	}
 	// по умолчанию включим UDP (самый полезный) и TCP
 	// если не хочешь — поставь false в yaml

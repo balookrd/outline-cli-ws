@@ -139,29 +139,42 @@ func socks5ReadRequest(c net.Conn) (cmd byte, dst string, err error) {
 }
 
 func socks5Reply(c net.Conn, rep byte, bind string) error {
-	// VER REP RSV ATYP BND.ADDR BND.PORT
 	host, portStr, err := net.SplitHostPort(bind)
 	if err != nil {
-		host, portStr, _ = net.SplitHostPort("0.0.0.0:0")
+		host = "0.0.0.0"
+		portStr = "0"
 	}
+
 	port := uint16(0)
 	if p, e := net.LookupPort("tcp", portStr); e == nil {
 		port = uint16(p)
 	}
-	ip := net.ParseIP(host).To4()
-	atyp := byte(0x01)
-	addr := ip
-	if ip == nil {
+
+	ip := net.ParseIP(host)
+
+	var atyp byte
+	var addr []byte
+
+	if ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			atyp = 0x01
+			addr = ip4
+		} else {
+			atyp = 0x04
+			addr = ip.To16()
+		}
+	} else {
 		atyp = 0x03
 		addr = append([]byte{byte(len(host))}, []byte(host)...)
 	}
 
-	b := make([]byte, 0, 6+len(addr))
-	b = append(b, 0x05, rep, 0x00, atyp)
+	b := []byte{0x05, rep, 0x00, atyp}
 	b = append(b, addr...)
+
 	pb := make([]byte, 2)
 	binary.BigEndian.PutUint16(pb, port)
 	b = append(b, pb...)
+
 	_, err = c.Write(b)
 	return err
 }

@@ -29,7 +29,7 @@ type UDPAssociation struct {
 func NewUDPAssociation(parent context.Context, up UpstreamConfig) (*UDPAssociation, error) {
 	ctx, cancel := context.WithCancel(parent)
 
-	uc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	uc, err := net.ListenPacket("udp", ":0")
 	if err != nil {
 		cancel()
 		return nil, err

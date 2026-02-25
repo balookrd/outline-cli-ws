@@ -26,6 +26,7 @@ probe:
   tcp_target: "example.com:80"
   udp_target: "1.1.1.1:53"
   dns_name: "example.com"
+  dns_type: "AAAA"
 
 upstreams:
   - name: "s1"
