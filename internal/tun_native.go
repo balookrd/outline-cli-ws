@@ -396,8 +396,10 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		}
 		ps.flows[dst] = time.Now()
 
-		replyCh := ps.sess.Subscribe(dst)
-		go func() {
+		dstLocal := dst
+		replyCh := ps.sess.Subscribe(dstLocal)
+		go func(dst string) {
+			defer ps.sess.Unsubscribe(dst)
 			for {
 				select {
 				case <-ctx.Done():
@@ -414,7 +416,6 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 					ps.flows[dst] = now
 					ps.mu.Unlock()
 
-					// touch port session
 					pt.mu.Lock()
 					if cur := pt.ports[pk]; cur != nil {
 						cur.lastSeen = now
@@ -422,7 +423,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 					pt.mu.Unlock()
 				}
 			}
-		}()
+		}(dstLocal)
 	}
 	ps.mu.Unlock()
 
