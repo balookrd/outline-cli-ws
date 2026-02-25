@@ -1,17 +1,16 @@
-//go:build linux
-
 package internal
 
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 )
 
 type udpPortKey struct {
 	netProto uint8
-	srcIP    string
+	srcIP    netip.Addr
 	srcPort  uint16
 }
 
@@ -22,7 +21,7 @@ type udpPortSession struct {
 	lastSeen time.Time
 
 	mu    sync.Mutex
-	flows map[string]time.Time // dst -> lastSeen
+	flows map[string]time.Time
 }
 
 type udpPortTable struct {

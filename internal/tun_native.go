@@ -1,5 +1,3 @@
-//go:build linux
-
 package internal
 
 import (
@@ -8,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -355,12 +354,26 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	nsUDP := gonet.NewUDPConn(wq, epUDP)
 	defer nsUDP.Close()
 
-	srcIP := net.IP(id.LocalAddress.AsSlice()).String()
-	dstIP := net.IP(id.RemoteAddress.AsSlice()).String()
-	dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.RemotePort))
+	var srcIP netip.Addr
+	if id.LocalAddress.Len() == 4 {
+		srcIP = netip.AddrFrom4([4]byte(id.LocalAddress.AsSlice()))
+	} else {
+		srcIP = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
+	}
+	var dstAddr netip.Addr
+	if id.RemoteAddress.Len() == 4 {
+		dstAddr = netip.AddrFrom4([4]byte(id.RemoteAddress.AsSlice()))
+	} else {
+		dstAddr = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
+	}
+	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.RemotePort))
 
-	pk := udpPortKey{netProto: 4, srcIP: srcIP, srcPort: id.LocalPort}
-	if len(id.LocalAddress.AsSlice()) == 16 {
+	pk := udpPortKey{
+		netProto: 4,
+		srcIP:    srcIP,
+		srcPort:  id.LocalPort,
+	}
+	if srcIP.Is6() {
 		pk.netProto = 6
 	}
 
@@ -371,7 +384,16 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 
 	// subscribe once per dst inside this port-session
 	ps.mu.Lock()
+
 	if _, ok := ps.flows[dst]; !ok {
+		maxDst := pt.cfg.UDPMaxDstPerPort
+		if maxDst <= 0 {
+			maxDst = 512
+		}
+		if len(ps.flows) >= maxDst {
+			ps.mu.Unlock()
+			return
+		}
 		ps.flows[dst] = time.Now()
 
 		replyCh := ps.sess.Subscribe(dst)

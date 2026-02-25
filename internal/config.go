@@ -29,6 +29,7 @@ type TunConfig struct {
 	UDPIdleTimeout     time.Duration `yaml:"udp_idle_timeout"`      // e.g. 60s
 	UDPGCInterval      time.Duration `yaml:"udp_gc_interval"`       // e.g. 10s
 	UDPFlowIdleTimeout time.Duration `yaml:"udp_flow_idle_timeout"` // idle dst-subscription внутри port-session
+	UDPMaxDstPerPort   int           `yaml:"udp_max_dst_per_port"`
 }
 
 type HealthcheckConfig struct {
@@ -102,6 +103,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Tun.UDPFlowIdleTimeout == 0 {
 		c.Tun.UDPFlowIdleTimeout = 30 * time.Second
+	}
+	if c.Tun.UDPMaxDstPerPort == 0 {
+		c.Tun.UDPMaxDstPerPort = 512
 	}
 	if c.Healthcheck.Interval == 0 {
 		c.Healthcheck.Interval = 5 * time.Second
