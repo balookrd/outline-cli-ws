@@ -14,6 +14,7 @@ type Config struct {
 	Healthcheck HealthcheckConfig `yaml:"healthcheck"`
 	Selection   SelectionConfig   `yaml:"selection"`
 	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
+	Probe       ProbeConfig       `yaml:"probe"`
 }
 
 type HealthcheckConfig struct {
@@ -47,6 +48,17 @@ type UpstreamConfig struct {
 
 	Cipher string `yaml:"cipher"`
 	Secret string `yaml:"secret"`
+}
+
+type ProbeConfig struct {
+	EnableTCP bool `yaml:"enable_tcp"`
+	EnableUDP bool `yaml:"enable_udp"`
+
+	Timeout time.Duration `yaml:"timeout"`
+
+	TCPTarget string `yaml:"tcp_target"` // e.g. "example.com:80"
+	UDPTarget string `yaml:"udp_target"` // e.g. "1.1.1.1:53"
+	DNSName   string `yaml:"dns_name"`   // e.g. "example.com"
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -102,6 +114,24 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Selection.WarmStandbyInterval == 0 {
 		c.Selection.WarmStandbyInterval = 2 * time.Second
+	}
+	if c.Probe.Timeout == 0 {
+		c.Probe.Timeout = 2 * time.Second
+	}
+	if c.Probe.TCPTarget == "" {
+		c.Probe.TCPTarget = "example.com:80"
+	}
+	if c.Probe.UDPTarget == "" {
+		c.Probe.UDPTarget = "1.1.1.1:53"
+	}
+	if c.Probe.DNSName == "" {
+		c.Probe.DNSName = "example.com"
+	}
+	// по умолчанию включим UDP (самый полезный) и TCP
+	// если не хочешь — поставь false в yaml
+	if !c.Probe.EnableTCP && !c.Probe.EnableUDP {
+		c.Probe.EnableTCP = true
+		c.Probe.EnableUDP = true
 	}
 	for i := range c.Upstreams {
 		if c.Upstreams[i].Weight <= 0 {

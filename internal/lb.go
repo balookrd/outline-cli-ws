@@ -43,8 +43,9 @@ type upstreamState struct {
 }
 
 type LoadBalancer struct {
-	hc  HealthcheckConfig
-	sel SelectionConfig
+	hc    HealthcheckConfig
+	sel   SelectionConfig
+	probe ProbeConfig
 
 	mu   sync.Mutex
 	pool []*upstreamState
@@ -53,7 +54,7 @@ type LoadBalancer struct {
 	stickyUntil time.Time
 }
 
-func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig) *LoadBalancer {
+func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig) *LoadBalancer {
 	pool := make([]*upstreamState, 0, len(ups))
 	for _, u := range ups {
 		s := &upstreamState{cfg: u}
@@ -61,7 +62,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	return &LoadBalancer{hc: hc, sel: sel, pool: pool}
+	return &LoadBalancer{hc: hc, sel: sel, probe: probe, pool: pool}
 }
 
 func (lb *LoadBalancer) PickTCP() (*upstreamState, error) {
@@ -392,6 +393,16 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *upstreamState) {
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS)
+	if err == nil && lb.probe.EnableTCP {
+		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
+		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget)
+		pcancel()
+		if perr != nil {
+			err = perr
+		} else {
+			rtt = prtt
+		}
+	}
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -409,6 +420,16 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *upstreamState) {
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS)
+	if err == nil && lb.probe.EnableUDP {
+		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
+		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName)
+		pcancel()
+		if perr != nil {
+			err = perr
+		} else {
+			rtt = prtt
+		}
+	}
 
 	st.mu.Lock()
 	defer st.mu.Unlock()

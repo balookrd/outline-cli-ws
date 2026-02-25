@@ -19,6 +19,14 @@ healthcheck:
   fail_threshold: 2
   success_threshold: 1
 
+probe:
+  enable_tcp: true
+  enable_udp: true
+  timeout: "2s"
+  tcp_target: "example.com:80"
+  udp_target: "1.1.1.1:53"
+  dns_name: "example.com"
+
 upstreams:
   - name: "s1"
     weight: 1.0

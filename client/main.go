@@ -22,7 +22,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	lb := internal.NewLoadBalancer(cfg.Upstreams, cfg.Healthcheck, cfg.Selection)
+	lb := internal.NewLoadBalancer(cfg.Upstreams, cfg.Healthcheck, cfg.Selection, cfg.Probe)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
