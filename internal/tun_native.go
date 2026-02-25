@@ -402,11 +402,12 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 				select {
 				case <-ctx.Done():
 					return
-				case b, ok := <-replyCh:
+				case p, ok := <-replyCh:
 					if !ok {
 						return
 					}
-					_, _ = nsUDP.Write(b)
+					_, _ = nsUDP.Write(p.B)
+					p.Release()
 
 					now := time.Now()
 					ps.mu.Lock()

@@ -31,20 +31,6 @@ func main() {
 	go lb.RunHealthChecks(ctx)
 	go lb.RunWarmStandby(ctx)
 
-	udpSM := internal.NewUDPSessionManager(lb, 60*time.Second)
-	go func() {
-		t := time.NewTicker(30 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				udpSM.GC()
-			}
-		}
-	}()
-
 	// SOCKS5 server
 	addr := cfg.Listen.SOCKS5
 	ln, err := net.Listen("tcp", addr)

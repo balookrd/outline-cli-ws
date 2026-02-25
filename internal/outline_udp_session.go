@@ -3,12 +3,32 @@ package internal
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 	"nhooyr.io/websocket"
 )
+
+type UDPPayload struct {
+	B       []byte
+	release func()
+}
+
+func (p UDPPayload) Release() {
+	if p.release != nil {
+		p.release()
+	}
+}
+
+type addrKey struct {
+	atyp byte     // 0x01 v4, 0x04 v6, 0x03 domain
+	ip   [16]byte // for v4 use first 4
+	port uint16
+	// domain key (rare path)
+	domain string
+}
 
 type OutlineUDPSession struct {
 	ctx    context.Context
@@ -18,7 +38,9 @@ type OutlineUDPSession struct {
 	enc net.PacketConn
 
 	mu   sync.Mutex
-	subs map[string]chan []byte // "ip:port"
+	subs map[addrKey]chan UDPPayload
+
+	pool sync.Pool // stores *[]byte
 }
 
 func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *UpstreamState) (*OutlineUDPSession, error) {
@@ -45,7 +67,11 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 		cancel: cancel,
 		wsc:    wsc,
 		enc:    encPC,
-		subs:   make(map[string]chan []byte),
+		subs:   make(map[addrKey]chan UDPPayload),
+	}
+	s.pool.New = func() any {
+		b := make([]byte, 0, 2048)
+		return &b
 	}
 	go s.readLoop()
 	return s, nil
@@ -60,26 +86,38 @@ func (s *OutlineUDPSession) Close() {
 	for _, ch := range s.subs {
 		close(ch)
 	}
-	s.subs = map[string]chan []byte{}
+	s.subs = map[addrKey]chan UDPPayload{}
 	s.mu.Unlock()
 }
 
-func (s *OutlineUDPSession) Subscribe(from string) <-chan []byte {
+func (s *OutlineUDPSession) Subscribe(from string) <-chan UDPPayload {
+	k, ok := addrKeyFromHostPort(from)
+	if !ok {
+		ch := make(chan UDPPayload)
+		close(ch)
+		return ch
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ch := s.subs[from]
+	ch := s.subs[k]
 	if ch == nil {
-		ch = make(chan []byte, 128)
-		s.subs[from] = ch
+		ch = make(chan UDPPayload, 128)
+		s.subs[k] = ch
 	}
 	return ch
 }
 
 func (s *OutlineUDPSession) Unsubscribe(from string) {
+	k, ok := addrKeyFromHostPort(from)
+	if !ok {
+		return
+	}
+
 	s.mu.Lock()
-	ch := s.subs[from]
+	ch := s.subs[k]
 	if ch != nil {
-		delete(s.subs, from)
+		delete(s.subs, k)
 		close(ch)
 	}
 	s.mu.Unlock()
@@ -98,31 +136,129 @@ func (s *OutlineUDPSession) Send(dst string, payload []byte) error {
 }
 
 func (s *OutlineUDPSession) readLoop() {
-	buf := make([]byte, 65535)
+	plainBuf := make([]byte, 65535)
+
 	for {
-		n, _, err := s.enc.ReadFrom(buf)
+		n, _, err := s.enc.ReadFrom(plainBuf)
 		if err != nil {
 			return
 		}
-		plain := buf[:n]
+		plain := plainBuf[:n]
 
-		host, port, off, err := parseSocksAddrFromPlain(plain)
-		if err != nil || off > len(plain) {
+		k, off, ok := parseAddrKeyFromPlain(plain)
+		if !ok || off > len(plain) {
+			continue
+		}
+		payloadLen := len(plain) - off
+		if payloadLen <= 0 {
 			continue
 		}
 
-		from := net.JoinHostPort(host, port)
-		payload := append([]byte(nil), plain[off:]...)
+		// buffer from pool
+		pbPtr := s.pool.Get().(*[]byte)
+		pb := *pbPtr
+		if cap(pb) < payloadLen {
+			pb = make([]byte, payloadLen)
+		}
+		pb = pb[:payloadLen]
+		copy(pb, plain[off:]) // единственный неизбежный copy
+
+		msg := UDPPayload{
+			B: pb,
+			release: func() {
+				*pbPtr = pb[:0]
+				s.pool.Put(pbPtr)
+			},
+		}
 
 		s.mu.Lock()
-		ch := s.subs[from]
+		ch := s.subs[k]
 		s.mu.Unlock()
 
 		if ch != nil {
 			select {
-			case ch <- payload:
+			case ch <- msg:
 			default:
+				msg.Release()
 			}
+		} else {
+			msg.Release()
 		}
 	}
+}
+
+func parseAddrKeyFromPlain(plain []byte) (k addrKey, off int, ok bool) {
+	if len(plain) < 1 {
+		return k, 0, false
+	}
+	k.atyp = plain[0]
+	off = 1
+
+	switch k.atyp {
+	case 0x01: // IPv4
+		if len(plain) < off+4+2 {
+			return k, 0, false
+		}
+		copy(k.ip[:4], plain[off:off+4])
+		off += 4
+	case 0x04: // IPv6
+		if len(plain) < off+16+2 {
+			return k, 0, false
+		}
+		copy(k.ip[:], plain[off:off+16])
+		off += 16
+	case 0x03: // domain (alloc unavoidable)
+		if len(plain) < off+1 {
+			return k, 0, false
+		}
+		l := int(plain[off])
+		off++
+		if len(plain) < off+l+2 {
+			return k, 0, false
+		}
+		k.domain = string(plain[off : off+l])
+		off += l
+	default:
+		return k, 0, false
+	}
+
+	// port
+	k.port = uint16(plain[off])<<8 | uint16(plain[off+1])
+	off += 2
+	return k, off, true
+}
+
+func addrKeyFromHostPort(hp string) (addrKey, bool) {
+	host, portStr, err := net.SplitHostPort(hp)
+	if err != nil {
+		return addrKey{}, false
+	}
+	p, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return addrKey{}, false
+	}
+	port := uint16(p)
+
+	ip := net.ParseIP(host)
+	if ip4 := ip.To4(); ip4 != nil {
+		var k addrKey
+		k.atyp = 0x01
+		copy(k.ip[:4], ip4)
+		k.port = port
+		return k, true
+	}
+	if ip6 := ip.To16(); ip6 != nil {
+		var k addrKey
+		k.atyp = 0x04
+		copy(k.ip[:], ip6)
+		k.port = port
+		return k, true
+	}
+
+	// domain
+	var k addrKey
+	k.atyp = 0x03
+	k.domain = host
+	k.port = port
+	return k, true
 }
