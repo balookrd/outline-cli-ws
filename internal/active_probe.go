@@ -14,9 +14,8 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// ---- TCP Quality Probe: HTTP HEAD ----
-
-func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string) (time.Duration, error) {
+// ProbeTCPQuality ---- TCP Quality Probe: HTTP HEAD ----
+func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string, fwmark uint32) (time.Duration, error) {
 	start := time.Now()
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
@@ -24,7 +23,7 @@ func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string) (tim
 		return 0, err
 	}
 
-	wsc, err := DialWSStream(ctx, up.TCPWSS)
+	wsc, err := DialWSStream(ctx, up.TCPWSS, fwmark)
 	if err != nil {
 		return 0, err
 	}
@@ -64,9 +63,9 @@ func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string) (tim
 	return time.Since(start), nil
 }
 
-// ---- UDP Quality Probe: DNS query ----
-
-func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, name string, dnstype string) (time.Duration, error) {
+// ProbeUDPQuality ---- UDP Quality Probe: DNS query ----
+func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string,
+	name string, dnstype string, fwmark uint32) (time.Duration, error) {
 	start := time.Now()
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
@@ -74,7 +73,7 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string, n
 		return 0, err
 	}
 
-	wsc, err := DialWSStream(ctx, up.UDPWSS)
+	wsc, err := DialWSStream(ctx, up.UDPWSS, fwmark)
 	if err != nil {
 		return 0, err
 	}

@@ -26,7 +26,7 @@ type UDPAssociation struct {
 	peerUDP *net.UDPAddr // learned from first client packet
 }
 
-func NewUDPAssociation(parent context.Context, up UpstreamConfig) (*UDPAssociation, error) {
+func NewUDPAssociation(parent context.Context, up UpstreamConfig, fwmark uint32) (*UDPAssociation, error) {
 	ctx, cancel := context.WithCancel(parent)
 
 	uc, err := net.ListenPacket("udp", ":0")
@@ -35,7 +35,7 @@ func NewUDPAssociation(parent context.Context, up UpstreamConfig) (*UDPAssociati
 		return nil, err
 	}
 
-	wsc, err := DialWSStream(ctx, up.UDPWSS)
+	wsc, err := DialWSStream(ctx, up.UDPWSS, fwmark)
 	if err != nil {
 		uc.Close()
 		cancel()

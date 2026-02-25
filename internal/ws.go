@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"syscall"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -19,23 +20,40 @@ type WSNetConn struct {
 	buf    []byte
 }
 
-func DialWSStream(ctx context.Context, rawurl string) (*websocket.Conn, error) {
+func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (*websocket.Conn, error) {
 	u, err := url.Parse(rawurl)
 	if err != nil {
 		return nil, err
 	}
-	opts := &websocket.DialOptions{
-		HTTPClient: &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
-			},
+
+	d := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			var ctrlErr error
+			if err := c.Control(func(fd uintptr) {
+				ctrlErr = setSocketMark(fd, fwmark)
+			}); err != nil {
+				return err
+			}
+			return ctrlErr
 		},
 	}
-	// ws:// or wss:// supported
+
+	tr := &http.Transport{
+		Proxy:       http.ProxyFromEnvironment,
+		DialContext: d.DialContext,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+
+	opts := &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: tr,
+		},
+	}
+
 	c, _, err := websocket.Dial(ctx, u.String(), opts)
 	if err != nil {
 		return nil, err
@@ -43,10 +61,10 @@ func DialWSStream(ctx context.Context, rawurl string) (*websocket.Conn, error) {
 	return c, nil
 }
 
-// Probe just verifies WebSocket handshake succeeds.
-func ProbeWSS(ctx context.Context, rawurl string) (time.Duration, error) {
+// ProbeWSS Probe just verifies WebSocket handshake succeeds.
+func ProbeWSS(ctx context.Context, rawurl string, fwmark uint32) (time.Duration, error) {
 	start := time.Now()
-	c, err := DialWSStream(ctx, rawurl)
+	c, err := DialWSStream(ctx, rawurl, fwmark)
 	if err != nil {
 		return 0, err
 	}

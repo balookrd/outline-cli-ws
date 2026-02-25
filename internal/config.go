@@ -16,6 +16,7 @@ type Config struct {
 	Selection   SelectionConfig   `yaml:"selection"`
 	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
 	Probe       ProbeConfig       `yaml:"probe"`
+	Fwmark      uint32            `yaml:"fwmark"` // 0 = disabled
 }
 
 type HealthcheckConfig struct {

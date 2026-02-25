@@ -7,7 +7,7 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// AcquireTCPWS: отдаёт прогретый WS (если есть) или делает Dial.
+// AcquireTCPWS отдаёт прогретый WS (если есть) или делает Dial.
 // Если взяли прогретый — слот освобождается и будет догрет снова.
 func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *upstreamState) (*websocket.Conn, error) {
 	// 1) попробуем взять прогретый
@@ -21,10 +21,10 @@ func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *upstreamState) (*w
 	}
 
 	// 2) иначе — обычный dial
-	return DialWSStream(ctx, up.cfg.TCPWSS)
+	return DialWSStream(ctx, up.cfg.TCPWSS, lb.fwmark)
 }
 
-// EnsureStandbyTCP: гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).
+// EnsureStandbyTCP гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).
 func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *upstreamState) {
 	up.mu.Lock()
 	ok := up.tcp.healthy && time.Now().After(up.tcpCooldownUntil)
@@ -52,7 +52,7 @@ func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *upstreamState)
 	cctx, cancel := context.WithTimeout(ctx, lb.hc.Timeout)
 	defer cancel()
 
-	c, err := DialWSStream(cctx, up.cfg.TCPWSS)
+	c, err := DialWSStream(cctx, up.cfg.TCPWSS, lb.fwmark)
 	if err != nil {
 		// не делаем жёсткий failover только из-за standby — но можно чуть штрафовать
 		return

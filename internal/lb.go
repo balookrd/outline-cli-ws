@@ -43,9 +43,10 @@ type upstreamState struct {
 }
 
 type LoadBalancer struct {
-	hc    HealthcheckConfig
-	sel   SelectionConfig
-	probe ProbeConfig
+	hc     HealthcheckConfig
+	sel    SelectionConfig
+	probe  ProbeConfig
+	fwmark uint32
 
 	mu   sync.Mutex
 	pool []*upstreamState
@@ -54,7 +55,7 @@ type LoadBalancer struct {
 	stickyUntil time.Time
 }
 
-func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig) *LoadBalancer {
+func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
 	pool := make([]*upstreamState, 0, len(ups))
 	for _, u := range ups {
 		s := &upstreamState{cfg: u}
@@ -62,7 +63,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	return &LoadBalancer{hc: hc, sel: sel, probe: probe, pool: pool}
+	return &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
 }
 
 func (lb *LoadBalancer) PickTCP() (*upstreamState, error) {
@@ -392,10 +393,10 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *upstreamState) {
 	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS)
+	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
 	if err == nil && lb.probe.EnableTCP {
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget)
+		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
 		pcancel()
 		if perr != nil {
 			err = perr
@@ -419,10 +420,10 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *upstreamState) {
 	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS)
+	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
 	if err == nil && lb.probe.EnableUDP {
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType)
+		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
 		pcancel()
 		if perr != nil {
 			err = perr

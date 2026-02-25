@@ -81,7 +81,7 @@ func (s *Socks5Server) handleUDPAssociate(ctx context.Context, c net.Conn) {
 		return
 	}
 
-	assoc, err := NewUDPAssociation(ctx, up.cfg)
+	assoc, err := NewUDPAssociation(ctx, up.cfg, s.LB.fwmark)
 	if err != nil {
 		s.LB.ReportUDPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")

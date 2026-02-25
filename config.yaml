@@ -28,6 +28,8 @@ probe:
   dns_name: "example.com"
   dns_type: "AAAA"
 
+fwmark: 0
+
 upstreams:
   - name: "s1"
     weight: 1.0
