@@ -31,6 +31,20 @@ func main() {
 	go lb.RunHealthChecks(ctx)
 	go lb.RunWarmStandby(ctx)
 
+	udpSM := internal.NewUDPSessionManager(lb, 60*time.Second)
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				udpSM.GC()
+			}
+		}
+	}()
+
 	// SOCKS5 server
 	addr := cfg.Listen.SOCKS5
 	ln, err := net.Listen("tcp", addr)
@@ -51,11 +65,16 @@ func main() {
 		_ = ln.Close()
 	}()
 
-	stopTun, err := internal.StartTun2SocksEngine(ctx, cfg.Tun, cfg.Listen.SOCKS5, cfg.Fwmark)
-	if err != nil {
-		log.Fatalf("tun: %v", err)
+	if cfg.Tun.Enable {
+		log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Tun.Device)
+
+		go func() {
+			if err := internal.RunTunNative(ctx, cfg.Tun, lb); err != nil {
+				log.Printf("tun native stopped: %v", err)
+				cancel()
+			}
+		}()
 	}
-	defer stopTun()
 
 	for {
 		c, err := ln.Accept()

@@ -7,8 +7,9 @@ tun:
   enable: false
   device: "tun0"
   mtu: 1500
-  interface: "lo0"
-  loglevel: "info"
+  udp_max_flows: 4096
+  udp_idle_timeout: "60s"
+  udp_gc_interval: "10s"
 
 selection:
   sticky_ttl: "60s"

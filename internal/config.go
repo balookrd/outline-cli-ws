@@ -21,12 +21,13 @@ type Config struct {
 }
 
 type TunConfig struct {
-	Enable   bool   `yaml:"enable"`
-	Auto     bool   `yaml:"auto"` // по умолчанию false
-	Device   string `yaml:"device"`
-	MTU      int    `yaml:"mtu"`
-	OutIface string `yaml:"interface"`
-	LogLevel string `yaml:"loglevel"`
+	Enable bool   `yaml:"enable"`
+	Device string `yaml:"device"`
+	MTU    int    `yaml:"mtu"`
+	// Native UDP flow table tuning
+	UDPMaxFlows    int           `yaml:"udp_max_flows"`    // e.g. 4096
+	UDPIdleTimeout time.Duration `yaml:"udp_idle_timeout"` // e.g. 60s
+	UDPGCInterval  time.Duration `yaml:"udp_gc_interval"`  // e.g. 10s
 }
 
 type HealthcheckConfig struct {
@@ -89,8 +90,14 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Tun.MTU == 0 {
 		c.Tun.MTU = 1500
 	}
-	if c.Tun.LogLevel == "" {
-		c.Tun.LogLevel = "info"
+	if c.Tun.UDPMaxFlows == 0 {
+		c.Tun.UDPMaxFlows = 4096
+	}
+	if c.Tun.UDPIdleTimeout == 0 {
+		c.Tun.UDPIdleTimeout = 60 * time.Second
+	}
+	if c.Tun.UDPGCInterval == 0 {
+		c.Tun.UDPGCInterval = 10 * time.Second
 	}
 	if c.Healthcheck.Interval == 0 {
 		c.Healthcheck.Interval = 5 * time.Second
