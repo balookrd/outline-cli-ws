@@ -1,6 +1,6 @@
 module outline-cli-ws
 
-go 1.23.1
+go 1.25.7
 
 require (
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5
