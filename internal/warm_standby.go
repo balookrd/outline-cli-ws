@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // AcquireTCPWS отдаёт прогретый WS (если есть) или делает Dial.

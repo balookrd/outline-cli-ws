@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
-	"nhooyr.io/websocket"
 )
 
 type UDPPayload struct {

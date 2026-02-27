@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc *websocket.Conn, up UpstreamConfig, dst string) error {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
-	"nhooyr.io/websocket"
 )
 
 // ProbeTCPQuality ---- TCP Quality Probe: HTTP HEAD ----

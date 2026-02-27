@@ -4,9 +4,9 @@ import (
 	"context"
 	"net"
 
+	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
-	"nhooyr.io/websocket"
 )
 
 // newSSTCPConn creates a Shadowsocks stream over a WS stream and writes the target header.

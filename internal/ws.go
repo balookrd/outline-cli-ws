@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 type WSNetConn struct {

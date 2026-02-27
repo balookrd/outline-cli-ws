@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // WSPacketConn adapts WebSocket binary messages to net.PacketConn.
