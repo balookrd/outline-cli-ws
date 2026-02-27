@@ -2,11 +2,8 @@ package internal
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
@@ -37,7 +34,7 @@ func NewUDPAssociation(parent context.Context, up UpstreamConfig, fwmark uint32)
 
 	wsc, err := DialWSStream(ctx, up.UDPWSS, fwmark)
 	if err != nil {
-		uc.Close()
+		_ = uc.Close()
 		cancel()
 		return nil, err
 	}
@@ -45,12 +42,12 @@ func NewUDPAssociation(parent context.Context, up UpstreamConfig, fwmark uint32)
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
 	if err != nil {
 		_ = wsc.Close(websocket.StatusNormalClosure, "close")
-		uc.Close()
+		_ = uc.Close()
 		cancel()
 		return nil, err
 	}
 
-	// Underlying packet transport: WS binary message <-> UDP datagram bytes
+	// Underlying packet transport: WS binary message <-> datagram bytes
 	wsPC := NewWSPacketConn(ctx, wsc)
 
 	// Encrypted PacketConn: WriteTo expects plaintext (addr+payload), ReadFrom returns plaintext
@@ -115,14 +112,11 @@ func (a *UDPAssociation) readFromClientLoop() {
 			continue
 		}
 
-		atyp := pkt[3]
-		off := 4
-
-		dstHost, dstPort, off2, err := parseSocksAddr(pkt, off, atyp)
+		// Parse DST.ADDR/DST.PORT starting at ATYP (pkt[3]).
+		dstHost, dstPort, off, err := parseSocksAddrAt(pkt, 3)
 		if err != nil {
 			continue
 		}
-		off = off2
 
 		data := pkt[off:]
 
@@ -157,13 +151,11 @@ func (a *UDPAssociation) readFromUpstreamLoop() {
 			continue
 		}
 
-		payload := plain[off:]
-
 		// SOCKS5 UDP response: RSV(2)=0, FRAG=0, then [socks addr], then DATA
 		resp := make([]byte, 0, 3+len(plain))
 		resp = append(resp, 0x00, 0x00, 0x00)
 		resp = append(resp, plain[:off]...)
-		resp = append(resp, payload...)
+		resp = append(resp, plain[off:]...)
 
 		a.mu.Lock()
 		peer := a.peerUDP
@@ -174,78 +166,3 @@ func (a *UDPAssociation) readFromUpstreamLoop() {
 		_, _ = a.uc.WriteTo(resp, peer)
 	}
 }
-
-func parseSocksAddr(pkt []byte, off int, atyp byte) (host, port string, newOff int, err error) {
-	switch atyp {
-	case 0x01:
-		if len(pkt) < off+4+2 {
-			return "", "", 0, errors.New("short ipv4")
-		}
-		host = net.IP(pkt[off : off+4]).String()
-		off += 4
-	case 0x03:
-		if len(pkt) < off+1 {
-			return "", "", 0, errors.New("short domain len")
-		}
-		l := int(pkt[off])
-		off++
-		if len(pkt) < off+l+2 {
-			return "", "", 0, errors.New("short domain")
-		}
-		host = string(pkt[off : off+l])
-		off += l
-	case 0x04:
-		if len(pkt) < off+16+2 {
-			return "", "", 0, errors.New("short ipv6")
-		}
-		host = net.IP(pkt[off : off+16]).String()
-		off += 16
-	default:
-		return "", "", 0, errors.New("bad atyp")
-	}
-	p := binary.BigEndian.Uint16(pkt[off : off+2])
-	off += 2
-	return host, itoa(int(p)), off, nil
-}
-
-// ---- WebSocket packet transport as net.PacketConn ----
-// One WS binary message = one UDP datagram bytes.
-
-type WSPacketConn struct {
-	ctx context.Context
-	c   *websocket.Conn
-}
-
-func NewWSPacketConn(ctx context.Context, c *websocket.Conn) *WSPacketConn {
-	return &WSPacketConn{ctx: ctx, c: c}
-}
-
-func (w *WSPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	for {
-		typ, data, err := w.c.Read(w.ctx)
-		if err != nil {
-			return 0, nil, err
-		}
-		if typ != websocket.MessageBinary {
-			continue
-		}
-		n := copy(p, data)
-		return n, dummyAddr{}, nil
-	}
-}
-
-func (w *WSPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if err := w.c.Write(w.ctx, websocket.MessageBinary, p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-
-func (w *WSPacketConn) Close() error {
-	return w.c.Close(websocket.StatusNormalClosure, "close")
-}
-
-func (w *WSPacketConn) LocalAddr() net.Addr                { return dummyAddr{} }
-func (w *WSPacketConn) SetDeadline(t time.Time) error      { return nil }
-func (w *WSPacketConn) SetReadDeadline(t time.Time) error  { return nil }
-func (w *WSPacketConn) SetWriteDeadline(t time.Time) error { return nil }

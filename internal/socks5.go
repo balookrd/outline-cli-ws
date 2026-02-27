@@ -114,9 +114,16 @@ func socks5Handshake(c net.Conn) error {
 	if _, err := io.ReadFull(c, m); err != nil {
 		return err
 	}
-	// no-auth
-	_, err := c.Write([]byte{0x05, 0x00})
-	return err
+	// We only support "no authentication" (0x00). If the client didn't offer it,
+	// we must reply with 0xFF per RFC 1928.
+	for _, method := range m {
+		if method == 0x00 {
+			_, err := c.Write([]byte{0x05, 0x00})
+			return err
+		}
+	}
+	_, _ = c.Write([]byte{0x05, 0xFF})
+	return errors.New("no acceptable auth method")
 }
 
 func socks5ReadRequest(c net.Conn) (cmd byte, dst string, err error) {

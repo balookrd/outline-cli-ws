@@ -7,7 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"outline-cli-ws/internal"
+	"outline-cli-ws/pkg/outlinews"
 	"syscall"
 	"time"
 )
@@ -17,12 +17,12 @@ func main() {
 	flag.StringVar(&cfgPath, "c", "config.yaml", "config path")
 	flag.Parse()
 
-	cfg, err := internal.LoadConfig(cfgPath)
+	cfg, err := outlinews.LoadConfig(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 
-	lb := internal.NewLoadBalancer(cfg.Upstreams, cfg.Healthcheck, cfg.Selection, cfg.Probe, cfg.Fwmark)
+	lb := outlinews.NewLoadBalancer(cfg.Upstreams, cfg.Healthcheck, cfg.Selection, cfg.Probe, cfg.Fwmark)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -39,7 +39,7 @@ func main() {
 	}
 	log.Printf("SOCKS5 listening on %s", addr)
 
-	srv := &internal.Socks5Server{LB: lb}
+	srv := &outlinews.Socks5Server{LB: lb}
 
 	// Graceful shutdown
 	sigc := make(chan os.Signal, 1)
@@ -55,7 +55,7 @@ func main() {
 		log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Tun.Device)
 
 		go func() {
-			if err := internal.RunTunNative(ctx, cfg.Tun, lb); err != nil {
+			if err := outlinews.RunTunNative(ctx, cfg.Tun, lb); err != nil {
 				log.Printf("tun native stopped: %v", err)
 				cancel()
 			}

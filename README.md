@@ -1,4 +1,3 @@
-```markdown
 # Outline WS Load-Balancing Client
 
 High-performance **Outline (Shadowsocks) client over WebSocket (ws/wss)**  
@@ -67,24 +66,31 @@ Embedded tun2socks
 ▼
 SOCKS5 → Load Balancer → WSS → Internet
 
-````
+```
 
 ---
 
 # Installation
 
-Requires Go 1.22+
+Requires Go 1.23+
 
 ```bash
 git clone <repo>
 cd outline-ws-lb
 go mod tidy
-go build -o outline-ws-lb
-````
+go build -o outline-ws-lb ./cmd/outline-cli-ws
+```
 
 ---
 
 # Basic Usage
+
+
+> Start by copying the example config:
+>
+> ```bash
+> cp examples/config.example.yaml config.yaml
+> ```
 
 ```bash
 ./outline-ws-lb -c config.yaml
@@ -106,7 +112,7 @@ curl -x socks5h://127.0.0.1:1080 https://ifconfig.me
 
 # Configuration
 
-## Minimal config.yaml
+## Minimal config.yaml (example)
 
 ```yaml
 listen:

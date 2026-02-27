@@ -15,6 +15,11 @@ type hcState struct {
 	failCount    int
 	successCount int
 
+	// inFlight prevents the scheduler from launching multiple concurrent
+	// health checks for the same upstream+protocol when a check takes longer
+	// than the scheduler tick.
+	inFlight bool
+
 	lastError     error
 	lastCheckTime time.Time
 
@@ -234,15 +239,23 @@ func (lb *LoadBalancer) runDueChecks(ctx context.Context) {
 	now := time.Now()
 
 	for _, st := range pool {
+		var launchTCP, launchUDP bool
 		st.mu.Lock()
-		tcpDue := !st.tcp.nextHC.After(now)
-		udpDue := !st.udp.nextHC.After(now)
+		// Mark as in-flight under the lock to avoid duplicate goroutines.
+		if !st.tcp.inFlight && !st.tcp.nextHC.After(now) {
+			st.tcp.inFlight = true
+			launchTCP = true
+		}
+		if !st.udp.inFlight && !st.udp.nextHC.After(now) {
+			st.udp.inFlight = true
+			launchUDP = true
+		}
 		st.mu.Unlock()
 
-		if tcpDue {
+		if launchTCP {
 			go lb.checkOneTCP(ctx, st)
 		}
-		if udpDue {
+		if launchUDP {
 			go lb.checkOneUDP(ctx, st)
 		}
 	}
@@ -411,6 +424,7 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	defer func() { st.tcp.inFlight = false }()
 
 	lb.applyHCResult(&st.tcp, err, rtt, st.cfg.Name, "tcp")
 
@@ -438,6 +452,7 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	defer func() { st.udp.inFlight = false }()
 
 	lb.applyHCResult(&st.udp, err, rtt, st.cfg.Name, "udp")
 

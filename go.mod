@@ -1,6 +1,12 @@
 module outline-cli-ws
 
-go 1.25.7
+// NOTE: The original `go` directive was set to a future Go toolchain version.
+// In offline/CI environments this triggers an automatic toolchain download
+// ("go: downloading goX.Y.Z"), which fails without network access.
+// The project builds with Go 1.23+.
+go 1.23.1
+
+toolchain go1.23.2
 
 require (
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5

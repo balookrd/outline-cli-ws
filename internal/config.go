@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -158,9 +159,9 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Probe.UDPTarget == "" {
 		c.Probe.UDPTarget = "1.1.1.1:53"
 	}
-	if strings.Contains(c.Probe.UDPTarget, "::") {
-		c.Probe.UDPTarget = "[2606:4700:4700::1111]:53"
-	}
+	// Normalize host:port formatting, especially for IPv6 literals.
+	// E.g. "2606:4700:4700::1111:53" -> "[2606:4700:4700::1111]:53"
+	c.Probe.UDPTarget = normalizeHostPort(c.Probe.UDPTarget)
 	if c.Probe.DNSName == "" {
 		c.Probe.DNSName = "example.com"
 	}
@@ -179,4 +180,41 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 	return &c, nil
+}
+
+// normalizeHostPort tries to ensure the value is a valid host:port string.
+// In particular, it adds brackets around IPv6 literals if they are missing.
+func normalizeHostPort(s string) string {
+	// Fast path: already valid.
+	if _, _, err := net.SplitHostPort(s); err == nil {
+		return s
+	}
+
+	// Recover common "IPv6-with-port-but-missing-brackets" input.
+	//
+	// Important: an unbracketed IPv6 literal like "2606:...::1111" is NOT
+	// host:port; the trailing "1111" is part of the address. To avoid
+	// mangling valid IPv6 addresses, only bracket-and-append a port when:
+	//   1) the suffix after the last ':' is all digits, AND
+	//   2) the prefix parses as a valid IP address.
+	if strings.Count(s, ":") >= 2 && !strings.HasPrefix(s, "[") {
+		idx := strings.LastIndexByte(s, ':')
+		if idx > 0 && idx < len(s)-1 {
+			host := s[:idx]
+			port := s[idx+1:]
+
+			allDigits := len(port) > 0
+			for i := 0; i < len(port); i++ {
+				if port[i] < '0' || port[i] > '9' {
+					allDigits = false
+					break
+				}
+			}
+
+			if allDigits && net.ParseIP(host) != nil {
+				return "[" + host + "]:" + port
+			}
+		}
+	}
+	return s
 }

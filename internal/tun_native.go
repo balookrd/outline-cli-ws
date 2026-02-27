@@ -200,7 +200,9 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	ep := channel.New(4096, uint32(mtu), "")
 	const nicID tcpip.NICID = 1
 	if err := st.CreateNIC(nicID, ep); err != nil {
-		return fmt.Errorf("CreateNIC: %w", err)
+		// gVisor returns tcpip.Error here (not the built-in error interface),
+		// so we can't wrap it with %w.
+		return fmt.Errorf("CreateNIC: %v", err)
 	}
 
 	// Important tuning for TUN:
