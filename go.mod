@@ -6,8 +6,6 @@ module outline-cli-ws
 // The project builds with Go 1.23+.
 go 1.25.0
 
-toolchain go1.25.7
-
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5
