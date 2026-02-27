@@ -5,7 +5,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
@@ -15,7 +14,7 @@ type UDPAssociation struct {
 	cancel context.CancelFunc
 
 	uc  net.PacketConn // local UDP relay for SOCKS5 client
-	wsc *websocket.Conn
+	wsc WSConn
 
 	enc net.PacketConn // Shadowsocks-encrypted PacketConn over WS packet transport
 
@@ -41,7 +40,7 @@ func NewUDPAssociation(parent context.Context, up UpstreamConfig, fwmark uint32)
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
 	if err != nil {
-		_ = wsc.Close(websocket.StatusNormalClosure, "close")
+		_ = wsc.Close(WSStatusNormalClosure, "close")
 		_ = uc.Close()
 		cancel()
 		return nil, err
@@ -73,6 +72,7 @@ func (a *UDPAssociation) Close() {
 	a.cancel()
 	_ = a.uc.Close()
 	_ = a.enc.Close()
+	_ = a.wsc.Close(WSStatusNormalClosure, "")
 }
 
 // SOCKS5 UDP request/response:

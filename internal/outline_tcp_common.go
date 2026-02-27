@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 
-	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
@@ -13,7 +12,7 @@ import (
 // The returned conn is the encrypted stream ready for io.Copy.
 //
 // Ownership: caller must Close() the returned conn.
-func newSSTCPConn(ctx context.Context, wsc *websocket.Conn, up UpstreamConfig, dst string) (net.Conn, error) {
+func newSSTCPConn(ctx context.Context, wsc WSConn, up UpstreamConfig, dst string) (net.Conn, error) {
 	wsconn := NewWSStreamConn(ctx, wsc)
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)

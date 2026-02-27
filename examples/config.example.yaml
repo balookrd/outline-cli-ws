@@ -43,8 +43,8 @@ probe:
 upstreams:
   - name: "s1"
     weight: 1.0
-    tcp_wss: "wss://domain.su/tcp"
-    udp_wss: "wss://domain.su/udp"
+    tcp_wss: "wss://domain.su/tcp?h2=only"
+    udp_wss: "wss://domain.su/udp?h2=only"
     cipher: "chacha20-ietf-poly1305"
     secret: "secret"
 

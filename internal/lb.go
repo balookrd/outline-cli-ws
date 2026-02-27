@@ -6,8 +6,6 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 type hcState struct {
@@ -44,7 +42,7 @@ type UpstreamState struct {
 
 	// warm-standby TCP
 	standbyMu  sync.Mutex
-	standbyTCP *websocket.Conn
+	standbyTCP WSConn
 }
 
 type LoadBalancer struct {
@@ -385,7 +383,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 			for _, u := range pool {
 				u.standbyMu.Lock()
 				if u.standbyTCP != nil {
-					_ = u.standbyTCP.Close(websocket.StatusNormalClosure, "shutdown")
+					_ = u.standbyTCP.Close(WSStatusNormalClosure, "shutdown")
 					u.standbyTCP = nil
 				}
 				u.standbyMu.Unlock()
@@ -560,7 +558,7 @@ func (lb *LoadBalancer) releaseDialSlot() {
 	}
 }
 
-func (lb *LoadBalancer) DialWSStreamLimited(ctx context.Context, url string) (*websocket.Conn, error) {
+func (lb *LoadBalancer) DialWSStreamLimited(ctx context.Context, url string) (WSConn, error) {
 	if err := lb.acquireDialSlot(ctx); err != nil {
 		return nil, err
 	}

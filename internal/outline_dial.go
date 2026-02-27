@@ -3,21 +3,19 @@ package internal
 import (
 	"context"
 	"net"
-
-	"github.com/coder/websocket"
 )
 
 // conn that closes websocket when Close() called
 // (useful for per-flow connections in TUN mode)
 type wsBoundConn struct {
 	net.Conn
-	wsc *websocket.Conn
+	wsc WSConn
 }
 
 func (c *wsBoundConn) Close() error {
 	_ = c.Conn.Close()
 	if c.wsc != nil {
-		_ = c.wsc.Close(websocket.StatusNormalClosure, "close")
+		_ = c.wsc.Close(WSStatusNormalClosure, "close")
 	}
 	return nil
 }
@@ -32,7 +30,7 @@ func DialOutlineTCP(ctx context.Context, lb *LoadBalancer, up *UpstreamState, ds
 
 	ss, err := newSSTCPConn(ctx, wsc, up.cfg, dst)
 	if err != nil {
-		_ = wsc.Close(websocket.StatusNormalClosure, "dial-error")
+		_ = wsc.Close(WSStatusNormalClosure, "dial-error")
 		return nil, err
 	}
 

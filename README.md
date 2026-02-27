@@ -1,31 +1,57 @@
 # Outline WS Load-Balancing Client
 
-High-performance **Outline (Shadowsocks) client over WebSocket (ws/wss)**  
-with intelligent load balancing, active health probing, IPv6, fwmark policy routing and optional full-system TUN mode.
+High-performance **Outline (Shadowsocks) client over WebSocket**
+with intelligent load balancing, active health probing, IPv6, fwmark policy routing, optional full-system TUN mode and
+native **WebSocket over HTTP/2 (RFC 8441 Extended CONNECT)** support.
 
 ---
 
-## ✨ Features
+# ✨ Features
 
-- ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
-- ✅ TCP + UDP over WebSocket (wss)
-- ✅ Fastest-first load balancing
-- ✅ Sticky routing + hysteresis
-- ✅ Runtime failover (instant switch on error)
-- ✅ Adaptive health-check scheduler
-- ✅ Separate TCP / UDP health states
-- ✅ Active quality probe (real traffic test)
-- ✅ IPv4 + IPv6 (dual stack)
-- ✅ fwmark (SO_MARK) for policy routing (Linux)
-- ✅ Embedded tun2socks (optional full-tunnel mode)
-- ✅ Warm-standby WebSocket connections
+### Core Transport
+
+* ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
+* ✅ TCP + UDP over WebSocket (wss)
+* ✅ Native WebSocket over HTTP/2 (RFC 8441, Extended CONNECT)
+* ✅ `h2-only` strict mode (no fallback)
+* ✅ Raw HTTP/2 framing (no net/http WS client)
+* ✅ Proper half-close handling (TCP FIN / WS CLOSE / H2 END_STREAM)
+* ✅ Stable TLS (no random `SSL_ERROR_SYSCALL`)
+* ✅ Automatic reconnect on stream close / RST / network errors
+
+---
+
+### Load Balancing
+
+* ✅ Fastest-first load balancing
+* ✅ Sticky routing + hysteresis
+* ✅ Runtime failover (instant switch on error)
+* ✅ Warm-standby WebSocket connections
+* ✅ Separate TCP / UDP health states
+
+---
+
+### Health & Probing
+
+* ✅ Adaptive health-check scheduler
+* ✅ Active quality probe (real traffic test)
+* ✅ Separate TCP / UDP scoring
+* ✅ RTT EWMA scoring
+* ✅ Failure penalty model
+
+---
+
+### Networking
+
+* ✅ IPv4 + IPv6 (dual stack)
+* ✅ fwmark (SO_MARK) for policy routing (Linux)
+* ✅ Embedded tun2socks (optional full-tunnel mode)
 
 ---
 
 # Architecture
 
 ```
-
 Applications
 │
 ▼
@@ -38,43 +64,108 @@ Load Balancer
 ├── Active Quality Probe
 ├── Fastest-first + Sticky
 ├── Runtime Failover
-└── Warm-standby (TCP)
+└── Warm-standby
 │
 ▼
 Shadowsocks AEAD
 │
 ▼
-WebSocket (wss)
+WebSocket (RFC8441 / HTTP2 or classic)
 │
 ▼
 Outline Servers
-
 ```
 
-Optional TUN mode:
+---
+
+# WebSocket Transport Modes
+
+## 1️⃣ Classic WebSocket (HTTP/1.1 Upgrade)
+
+Standard WSS handshake.
+
+Used if:
+
+* server does not support RFC 8441
+* `h2` mode is not requested
+
+---
+
+## 2️⃣ WebSocket over HTTP/2 (RFC 8441)
+
+Uses:
 
 ```
+:method = CONNECT
+:protocol = websocket
+```
 
-System Traffic
-│
-▼
-TUN (tun0)
-│
-▼
-Embedded tun2socks
-│
-▼
-SOCKS5 → Load Balancer → WSS → Internet
+Flow:
+
+1. TLS (ALPN=h2)
+2. HTTP/2 preface
+3. SETTINGS (ENABLE_CONNECT_PROTOCOL=1)
+4. Extended CONNECT
+5. WebSocket frames inside HTTP/2 DATA frames
+
+No HTTP/1.1 upgrade involved.
+
+---
+
+## 3️⃣ h2-only Mode
+
+Strict HTTP/2 only:
 
 ```
+wss://example.com/tcp?h2=only
+```
+
+Behavior:
+
+* Fails fast if server does not advertise `SETTINGS_ENABLE_CONNECT_PROTOCOL`
+* No HTTP/1.1 fallback
+* Pure RFC8441 path
+
+---
+
+## Runtime Flag (if required)
+
+Some Go builds gate Extended CONNECT:
+
+```
+GODEBUG=http2xconnect=1
+```
+
+---
+
+# Debug Mode
+
+Enable detailed transport logs:
+
+```
+OUTLINE_WS_DEBUG=1 ./outline-ws-lb -c config.yaml
+```
+
+Shows:
+
+* TLS handshake
+* ALPN
+* HTTP/2 SETTINGS
+* WINDOW_UPDATE
+* HEADERS
+* DATA frames
+* WebSocket CLOSE codes
+* Stream reopen events
 
 ---
 
 # Installation
 
-Requires Go 1.23+
+Requires:
 
-```bash
+* Go 1.25+ (Extended CONNECT support required)
+
+```
 git clone <repo>
 cd outline-ws-lb
 go mod tidy
@@ -85,14 +176,8 @@ go build -o outline-ws-lb ./cmd/outline-cli-ws
 
 # Basic Usage
 
-
-> Start by copying the example config:
->
-> ```bash
-> cp examples/config.example.yaml config.yaml
-> ```
-
-```bash
+```
+cp examples/config.example.yaml config.yaml
 ./outline-ws-lb -c config.yaml
 ```
 
@@ -104,15 +189,13 @@ Default SOCKS5:
 
 Test:
 
-```bash
+```
 curl -x socks5h://127.0.0.1:1080 https://ifconfig.me
 ```
 
 ---
 
-# Configuration
-
-## Minimal config.yaml (example)
+# Minimal Config
 
 ```yaml
 listen:
@@ -121,11 +204,30 @@ listen:
 upstreams:
   - name: "server-1"
     weight: 1
-    tcp_wss: "wss://example.com/TCP_PATH"
-    udp_wss: "wss://example.com/UDP_PATH"
+    tcp_wss: "wss://example.com/TCP_PATH?h2=only"
+    udp_wss: "wss://example.com/UDP_PATH?h2=only"
     cipher: "chacha20-ietf-poly1305"
     secret: "YOUR_SECRET"
 ```
+
+---
+
+# Half-Close Handling (Important)
+
+Correctly handles:
+
+* Client TCP FIN
+* Remote TCP FIN
+* WebSocket CLOSE (1000)
+* HTTP/2 END_STREAM
+* Proper stream shutdown without RST
+
+Prevents:
+
+* TLS stalls
+* random SSL_ERROR_SYSCALL
+* hanging curl sessions
+* half-open socket leaks
 
 ---
 
@@ -133,302 +235,149 @@ upstreams:
 
 ## Fastest-First
 
-Server score is calculated from:
+Score includes:
 
 * EWMA RTT
-* failure penalties
-* staleness penalties
-* weight
+* Failure penalties
+* Staleness penalties
+* Weight
 
-Lowest score wins.
-
-## Sticky Routing
-
-After selection:
-
-```
-sticky_until = now + sticky_ttl
-```
-
-Server won't change unless:
-
-* it becomes unhealthy
-* a significantly faster server appears (min_switch)
+Lowest score selected.
 
 ---
 
-# Health Check (Adaptive)
+## Sticky Routing
 
-Each upstream has **separate TCP and UDP health states**.
+Server stays selected until:
 
-Health interval dynamically adjusts:
+* unhealthy
+* significantly slower than competitor
+
+Prevents flapping.
+
+---
+
+# Adaptive Health Check
+
+Dynamic intervals:
 
 | State     | Interval           |
-| --------- | ------------------ |
+|-----------|--------------------|
 | DOWN      | min_interval       |
-| unstable  | moderate           |
+| unstable  | medium             |
 | stable UP | up to max_interval |
 
-Supports jitter and exponential backoff.
+Supports jitter + exponential backoff.
 
 ---
 
 # Active Quality Probe
 
-Instead of checking only WebSocket handshake, real traffic is tested.
-
-## TCP Probe
+### TCP Probe
 
 ```
-WSS → Shadowsocks → example.com:80 → HEAD /
+WSS → Shadowsocks → target:80 → HEAD /
 ```
 
 Success if response starts with `HTTP/`.
 
-## UDP Probe (DNS)
+### UDP Probe
+
+DNS query via upstream:
 
 ```
-WSS(packet) → Shadowsocks UDP → 1.1.1.1:53
-```
-
-Sends DNS query (A or AAAA).
-
-Config:
-
-```yaml
-probe:
-  enable_tcp: true
-  enable_udp: true
-  timeout: "2s"
-  tcp_target: "example.com:80"
-  udp_target: "1.1.1.1:53"
-  dns_name: "example.com"
-  dns_type: "A"   # or AAAA
+WSS → Shadowsocks UDP → DNS server
 ```
 
 ---
 
 # IPv6 Support
 
-Fully dual-stack:
-
 * IPv6 SOCKS clients
-* IPv6 upstream servers
+* IPv6 upstreams
 * IPv6 DNS probe
 * IPv6 TUN mode
 
-Example upstream:
+Example:
 
 ```yaml
-tcp_wss: "wss://[2001:db8::1]:443/TCP_PATH"
-udp_wss: "wss://[2001:db8::1]:443/UDP_PATH"
-```
-
-Example IPv6 DNS probe:
-
-```yaml
-probe:
-  udp_target: "[2606:4700:4700::1111]:53"
-  dns_type: "AAAA"
+tcp_wss: "wss://[2001:db8::1]:443/TCP_PATH?h2=only"
 ```
 
 ---
 
-# fwmark (Linux Policy Routing)
+# fwmark (Linux)
 
-All outgoing upstream connections can be marked with SO_MARK.
+Mark upstream sockets:
 
 ```yaml
 fwmark: 123
 ```
 
-Linux routing:
+Routing example:
 
-```bash
-ip route add default via <GW> dev <DEV> table 100
+```
 ip rule add fwmark 123 lookup 100
+ip route add default via <GW> dev <DEV> table 100
 ```
 
-Prevents routing loops when using TUN.
+Prevents routing loops in TUN mode.
 
 Requires:
 
 * Linux
-* CAP_NET_ADMIN or root
+* CAP_NET_ADMIN
 
 ---
 
-# TUN Mode (Full System Tunnel)
-
-Embedded tun2socks engine.
-
-## Config
+# TUN Mode
 
 ```yaml
 tun:
   enable: true
-  auto: false
   device: "tun0"
   mtu: 1500
-  interface: "eth0"
-  loglevel: "info"
-```
-
----
-
-## tun.auto Modes
-
-| enable | auto  | Behavior                     |
-| ------ | ----- | ---------------------------- |
-| false  | any   | TUN disabled                 |
-| true   | false | Expect existing tun0         |
-| true   | true  | Attempt to create/manage TUN |
-
-Default:
-
-```
-tun.auto = false
-```
-
-Safe production behavior.
-
----
-
-## Startup Logs
-
-Example:
-
-```
-TUN mode enabled (auto=false), expecting existing interface "tun0"
-TUN engine started (device=tun0, mtu=1500, out-if=eth0, fwmark=123)
-```
-
----
-
-## Linux Setup Example
-
-Create TUN:
-
-```bash
-ip tuntap add dev tun0 mode tun
-ip addr add 198.18.0.1/15 dev tun0
-ip link set tun0 up
-```
-
-Redirect traffic:
-
-```bash
-ip route replace default dev tun0
-```
-
-Policy routing (recommended):
-
-```bash
-ip route add default via <GW> dev <DEV> table 100
-ip rule add fwmark 123 lookup 100
 ```
 
 ---
 
 # Warm-Standby
 
-Keeps N fastest TCP WebSocket connections pre-opened.
+Keeps N TCP connections pre-opened:
 
 ```yaml
 selection:
   warm_standby_n: 2
-  warm_standby_interval: "2s"
 ```
 
-Improves failover speed.
-
----
-
-# Adaptive Health Config
-
-```yaml
-healthcheck:
-  interval: "5s"
-  min_interval: "1s"
-  max_interval: "30s"
-  jitter: "200ms"
-  backoff_factor: 1.6
-  rtt_scale: 0.25
-  timeout: "3s"
-  fail_threshold: 2
-  success_threshold: 1
-```
-
----
-
-# Docker
-
-Build:
-
-```bash
-docker build -t outline-ws-lb .
-```
-
-Run:
-
-```bash
-docker run \
-  --cap-add NET_ADMIN \
-  --device /dev/net/tun \
-  -p 127.0.0.1:1080:1080 \
-  -v ./config.yaml:/etc/outline/config.yaml:ro \
-  outline-ws-lb
-```
-
----
-
-# Recommended Production Setup
-
-```yaml
-fwmark: 123
-
-tun:
-  enable: true
-  auto: false
-  device: tun0
-  interface: eth0
-```
-
-With Linux policy routing via fwmark.
+Instant failover without cold handshake.
 
 ---
 
 # Performance Characteristics
 
 * Instant failover
-* No server flapping
+* No flapping
 * Separate TCP/UDP scoring
-* Low RTT jitter
+* Stable TLS behavior
+* Clean half-close
 * Full dual-stack
-* Supports system-wide tunnel
+* High concurrency safe
+* No random RST on TLS
 
 ---
 
 # Limitations
 
 * Linux required for fwmark and TUN
-* TUN mode requires root or CAP_NET_ADMIN
-* No built-in GUI
-* Not a kernel VPN driver (userspace tun2socks)
-
----
-
-# Roadmap Ideas
-
-* Prometheus metrics
-* HTTP stats API
-* QUIC transport
-* Multi-path routing
-* Per-country routing
-* Bandwidth-aware balancing
+* Root or CAP_NET_ADMIN needed for TUN
+* No GUI
+* No HTTP/3 (yet)
 
 ---
 
 # License
 
-  GNU GENERAL PUBLIC LICENSE Version 3
+GNU GENERAL PUBLIC LICENSE Version 3
+
+---

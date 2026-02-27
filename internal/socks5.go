@@ -8,8 +8,6 @@ import (
 	"log"
 	"net"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 type Socks5Server struct {
@@ -58,7 +56,7 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
 		return
 	}
-	defer wsc.Close(websocket.StatusNormalClosure, "close")
+	defer wsc.Close(WSStatusNormalClosure, "close")
 
 	// Reply success (bound addr can be 0.0.0.0:0 for our proxy)
 	if err := socks5Reply(c, 0x00, "0.0.0.0:0"); err != nil {

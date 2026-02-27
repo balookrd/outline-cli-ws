@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
@@ -27,7 +26,7 @@ func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string, fwma
 	if err != nil {
 		return 0, err
 	}
-	defer wsc.Close(websocket.StatusNormalClosure, "tcp-probe")
+	defer wsc.Close(WSStatusNormalClosure, "tcp-probe")
 
 	wsconn := NewWSStreamConn(ctx, wsc)
 	ssconn := ciph.StreamConn(wsconn)
@@ -77,7 +76,7 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string,
 	if err != nil {
 		return 0, err
 	}
-	defer wsc.Close(websocket.StatusNormalClosure, "udp-probe")
+	defer wsc.Close(WSStatusNormalClosure, "udp-probe")
 
 	// Underlying WS packet transport
 	wsPC := NewWSPacketConn(ctx, wsc)

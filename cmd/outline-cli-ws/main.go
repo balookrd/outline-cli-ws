@@ -41,16 +41,6 @@ func main() {
 
 	srv := &outlinews.Socks5Server{LB: lb}
 
-	// Graceful shutdown
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigc
-		log.Printf("shutting down...")
-		cancel()
-		_ = ln.Close()
-	}()
-
 	if cfg.Tun.Enable {
 		log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Tun.Device)
 
@@ -61,6 +51,16 @@ func main() {
 			}
 		}()
 	}
+
+	// Graceful shutdown
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigc
+		log.Printf("shutting down...")
+		cancel()
+		_ = ln.Close()
+	}()
 
 	for {
 		c, err := ln.Accept()

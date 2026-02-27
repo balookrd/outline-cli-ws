@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/coder/websocket"
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
@@ -34,7 +33,7 @@ type OutlineUDPSession struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	wsc *websocket.Conn
+	wsc WSConn
 	enc net.PacketConn
 
 	mu   sync.Mutex
@@ -54,7 +53,7 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 
 	ciph, err := core.PickCipher(up.cfg.Cipher, nil, up.cfg.Secret)
 	if err != nil {
-		_ = wsc.Close(websocket.StatusNormalClosure, "close")
+		_ = wsc.Close(WSStatusNormalClosure, "close")
 		cancel()
 		return nil, err
 	}
@@ -80,7 +79,7 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 func (s *OutlineUDPSession) Close() {
 	s.cancel()
 	_ = s.enc.Close()
-	_ = s.wsc.Close(websocket.StatusNormalClosure, "close")
+	_ = s.wsc.Close(WSStatusNormalClosure, "close")
 
 	s.mu.Lock()
 	for _, ch := range s.subs {
