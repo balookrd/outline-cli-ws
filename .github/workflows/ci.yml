@@ -44,7 +44,7 @@ jobs:
           go test ./... -count=1
 
   lint:
-    name: Lint (golangci-lint)
+    name: Lint (golangci-lint via go install)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,11 +58,14 @@ jobs:
           go-version: "1.25.x"
           cache: true
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64.5
-          args: --timeout=5m
+      - name: Install golangci-lint (built with current Go)
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5
+          golangci-lint version
+
+      - name: Run golangci-lint
+        run: |
+            golangci-lint run --timeout=5m
 
   security:
     name: Security (govulncheck)
