@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"sync"
 	"time"
 
 	"github.com/songgao/water"
@@ -26,113 +25,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
-
-// ----- UDP flow table (per-flow Outline UDP session) -----
-
-type udpFlowKey struct {
-	netProto uint8 // 4 or 6
-	srcIP    string
-	srcPort  uint16
-	dstIP    string
-	dstPort  uint16
-}
-
-type udpFlow struct {
-	key       udpFlowKey
-	dst       string
-	up        *UpstreamState
-	sess      *OutlineUDPSession
-	lastSeen  time.Time
-	closeOnce sync.Once
-}
-
-type udpFlowTable struct {
-	mu    sync.Mutex
-	lb    *LoadBalancer
-	cfg   TunConfig
-	flows map[udpFlowKey]*udpFlow
-}
-
-func newUDPFlowTable(lb *LoadBalancer, cfg TunConfig) *udpFlowTable {
-	return &udpFlowTable{
-		lb:    lb,
-		cfg:   cfg,
-		flows: make(map[udpFlowKey]*udpFlow),
-	}
-}
-
-func (t *udpFlowTable) get(key udpFlowKey) *udpFlow {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.flows[key]
-}
-
-func (t *udpFlowTable) put(key udpFlowKey, f *udpFlow) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	limit := t.cfg.UDPMaxFlows
-	if limit <= 0 {
-		limit = 4096
-	}
-	if len(t.flows) >= limit {
-		return fmt.Errorf("udp flow limit reached: %d", limit)
-	}
-	t.flows[key] = f
-	return nil
-}
-
-func (t *udpFlowTable) touch(key udpFlowKey) {
-	t.mu.Lock()
-	if f := t.flows[key]; f != nil {
-		f.lastSeen = time.Now()
-	}
-	t.mu.Unlock()
-}
-
-func (t *udpFlowTable) remove(key udpFlowKey) *udpFlow {
-	t.mu.Lock()
-	f := t.flows[key]
-	delete(t.flows, key)
-	t.mu.Unlock()
-	return f
-}
-
-func (t *udpFlowTable) gcOnce() {
-	now := time.Now()
-	idle := t.cfg.UDPIdleTimeout
-	if idle <= 0 {
-		idle = 60 * time.Second
-	}
-
-	var toClose []*udpFlow
-
-	t.mu.Lock()
-	for k, f := range t.flows {
-		if f == nil {
-			delete(t.flows, k)
-			continue
-		}
-		if now.Sub(f.lastSeen) > idle {
-			delete(t.flows, k)
-			toClose = append(toClose, f)
-		}
-	}
-	t.mu.Unlock()
-
-	for _, f := range toClose {
-		f.closeOnce.Do(func() {
-			f.sess.Close()
-		})
-	}
-}
-
-func ipVerFromAddrBytes(b []byte) uint8 {
-	if len(b) == 16 {
-		return 6
-	}
-	return 4
-}
 
 // ----- TUN open (existing interface created by script) -----
 
@@ -348,7 +240,12 @@ func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, i
 	}
 	defer out.Close()
 
-	go io.Copy(out, nsConn)
+	go func() {
+		if _, err := io.Copy(out, nsConn); err != nil {
+			// минимум: лог, иначе errcheck будет ругаться
+			log.Printf("tun: io.Copy nsConn->out: %v", err)
+		}
+	}()
 	_, _ = io.Copy(nsConn, out)
 }
 

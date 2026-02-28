@@ -214,13 +214,15 @@ func (c *rawH2Conn) init(ctx context.Context) error {
 		}
 		serverEnable := uint32(0)
 		found := false
-		sf.ForeachSetting(func(s http2.Setting) error {
+		if err := sf.ForeachSetting(func(s http2.Setting) error {
 			if s.ID == settingEnableConnectProtocol {
 				serverEnable = s.Val
 				found = true
 			}
 			return nil
-		})
+		}); err != nil {
+			return err // или: return fmt.Errorf("foreach setting: %w", err)
+		}
 		if found {
 			rfcdbg(c.dbgPrefix, "server SETTINGS_ENABLE_CONNECT_PROTOCOL=%d", serverEnable)
 		} else {
