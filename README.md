@@ -13,6 +13,7 @@ native **WebSocket over HTTP/2 (RFC 8441 Extended CONNECT)** support.
 * ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
 * ✅ TCP + UDP over WebSocket (wss)
 * ✅ Native WebSocket over HTTP/2 (RFC 8441, Extended CONNECT)
+* ✅ Native WebSocket over HTTP/3 (RFC 9220 Extended CONNECT) (`?h3=1`)
 * ✅ `h2-only` strict mode (no fallback)
 * ✅ Raw HTTP/2 framing (no net/http WS client)
 * ✅ Proper half-close handling (TCP FIN / WS CLOSE / H2 END_STREAM)
@@ -109,6 +110,26 @@ Flow:
 5. WebSocket frames inside HTTP/2 DATA frames
 
 No HTTP/1.1 upgrade involved.
+
+---
+
+## 3️⃣ WebSocket over HTTP/3 (RFC 9220)
+
+Use when upstream supports HTTP/3 Extended CONNECT for WebSocket.
+
+Examples:
+
+```
+wss://edge.example.com/tcp?h3=1
+wss://edge.example.com/udp?http3=1
+```
+
+Behavior:
+
+* Enables HTTP/3 dial path via URL flags (`h3`, `http3`, `quic`)
+* Performs RFC 9220 Extended CONNECT (`:protocol = websocket`) over QUIC
+* `h3=only` / `http3=only` enforces strict HTTP/3 mode (no fallback)
+* If `h3=1` and HTTP/3 fails, client falls back to h2/http1 path
 
 ---
 

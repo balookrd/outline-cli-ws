@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,9 +16,10 @@ import (
 
 // DialWSStream dials a websocket endpoint.
 //
-// It supports two handshakes:
+// It supports three handshakes:
 //  1. Classic HTTP/1.1 upgrade (always available)
-//  2. WebSocket over HTTP/2 (RFC 8441, Extended CONNECT) when enabled.
+//  2. WebSocket over HTTP/2 (RFC 8441, Extended CONNECT) when enabled
+//  3. WebSocket over HTTP/3 (RFC 9220, Extended CONNECT) when enabled.
 //
 // HTTP/2 Extended CONNECT support in Go has historically been gated behind
 // a GODEBUG flag in some toolchain versions (see golang/go#53208 referenced by
@@ -63,19 +65,27 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		},
 	}
 
-	// If the caller provided an explicit hint via query (?h2=1 / ?http2=1),
-	// try RFC 8441 first, then fall back.
-	q := u.Query()
-	tryH2 := q.Get("h2") == "1" || q.Get("http2") == "1" || q.Get("h2c") == "1"
-	// Explicit mode: HTTP/2 only (no fallback to classic HTTP/1.1 Upgrade).
-	// Supported spellings:
-	//   ?h2=only
-	//   ?http2=only
-	//   ?h2only=1
-	h2Only := q.Get("h2") == "only" || q.Get("http2") == "only" || q.Get("h2only") == "1"
+	tryH2, h2Only, tryH3, h3Only := parseTransportHints(u.Query())
+
+	if tryH3 && isWebSocketLikeScheme(u.Scheme) {
+		h3c, h3err := dialRFC9220(ctx, u)
+		if h3err == nil {
+			observeDial(upstream, proto, time.Since(start))
+			return h3c, nil
+		}
+		if h3Only {
+			return nil, fmt.Errorf("h3-only connect failed: %w", h3err)
+		}
+		log.Printf("[WS] upstream %q requested ws-over-quic mode, h3 failed (%v), trying h2/http1 fallback", u.Redacted(), h3err)
+		if !tryH2 {
+			tryH2 = true
+		}
+	} else if h3Only {
+		return nil, fmt.Errorf("h3-only mode requires ws/wss URL, got scheme=%q", u.Scheme)
+	}
 
 	if h2Only {
-		if !(u.Scheme == "wss" || u.Scheme == "ws") {
+		if !isWebSocketLikeScheme(u.Scheme) {
 			return nil, fmt.Errorf("h2-only mode requires ws/wss URL, got scheme=%q", u.Scheme)
 		}
 		h2c, h2err := dialRFC8441(ctx, u, tr)
@@ -86,7 +96,7 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		return nil, fmt.Errorf("h2-only connect failed: %w", h2err)
 	}
 
-	if tryH2 && (u.Scheme == "wss" || u.Scheme == "ws") {
+	if tryH2 && isWebSocketLikeScheme(u.Scheme) {
 		h2c, h2err := dialRFC8441(ctx, u, tr)
 		if h2err == nil {
 			observeDial(upstream, proto, time.Since(start))
@@ -106,6 +116,19 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 	observeDial(upstream, proto, time.Since(start))
 	return c, nil
+}
+
+func parseTransportHints(q url.Values) (tryH2, h2Only, tryH3, h3Only bool) {
+	tryH2 = q.Get("h2") == "1" || q.Get("http2") == "1" || q.Get("h2c") == "1"
+	h2Only = q.Get("h2") == "only" || q.Get("http2") == "only" || q.Get("h2only") == "1"
+	tryH3 = q.Get("h3") == "1" || q.Get("http3") == "1" || q.Get("quic") == "1"
+	h3Only = q.Get("h3") == "only" || q.Get("http3") == "only" || q.Get("h3only") == "1" || q.Get("quic") == "only"
+	return
+}
+
+func isWebSocketLikeScheme(s string) bool {
+	s = strings.ToLower(s)
+	return s == "ws" || s == "wss" || s == "http" || s == "https"
 }
 
 func upstreamFromURL(u *url.URL) (name, proto string) {

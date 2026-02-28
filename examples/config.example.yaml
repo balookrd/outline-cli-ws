@@ -50,7 +50,7 @@ upstreams:
 
   - name: "s2"
     weight: 0.5
-    tcp_wss: "wss://domain.su/tcp"
-    udp_wss: "wss://domain.su/udp"
+    tcp_wss: "wss://domain.su/tcp?h3=1"
+    udp_wss: "wss://domain.su/udp?h3=1"
     cipher: "chacha20-ietf-poly1305"
     secret: "secret"
