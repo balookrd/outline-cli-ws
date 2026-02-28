@@ -13,6 +13,7 @@ native **WebSocket over HTTP/2 (RFC 8441 Extended CONNECT)** support.
 * ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
 * ✅ TCP + UDP over WebSocket (wss)
 * ✅ Native WebSocket over HTTP/2 (RFC 8441, Extended CONNECT)
+* ✅ `ws-over-quic` compatibility mode for `h3ws2h1ws-proxy` (`?h3=1`)
 * ✅ `h2-only` strict mode (no fallback)
 * ✅ Raw HTTP/2 framing (no net/http WS client)
 * ✅ Proper half-close handling (TCP FIN / WS CLOSE / H2 END_STREAM)
@@ -109,6 +110,26 @@ Flow:
 5. WebSocket frames inside HTTP/2 DATA frames
 
 No HTTP/1.1 upgrade involved.
+
+---
+
+## 3️⃣ ws-over-quic Compatibility (`h3ws2h1ws-proxy`)
+
+Use when your edge proxy terminates QUIC and forwards WebSocket to HTTP/1.1 backend (for example, `h3ws2h1ws-proxy`).
+
+Examples:
+
+```
+wss://edge.example.com/tcp?h3=1
+wss://edge.example.com/udp?http3=1
+```
+
+Behavior:
+
+* Enables QUIC intent flags (`h3`, `http3`, `quic`) in config URLs
+* Client prefers RFC8441 (HTTP/2 CONNECT) when possible
+* If HTTP/2 extended CONNECT is unavailable, falls back to classic WebSocket upgrade
+* `h3=only` / `http3=only` are accepted as strict intent markers (current build still uses compatibility path)
 
 ---
 
