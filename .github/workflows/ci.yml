@@ -2,30 +2,107 @@ name: CI
 
 on:
   push:
+    branches: [ "main", "master" ]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Tests (unit + default)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [ "1.25.x" ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Go env
+        run: |
+          go version
+          go env
+
+      - name: Test (unit/offline)
+        run: |
+          go test ./... -tags unit -count=1 -race
+
+      - name: Test (default)
+        run: |
+          go test ./... -count=1
+
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60.3
+          args: --timeout=5m
+
+  security:
+    name: Security (govulncheck)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Install govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: govulncheck (source)
+        run: |
+          govulncheck ./...
+
+  helm:
+    name: Helm lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
         with:
-          go-version-file: go.mod
-          cache: true
+          version: v3.15.4
 
-      - name: gofmt check
+      - name: Helm lint
         run: |
-          test -z "$(gofmt -l .)" || (echo "gofmt required" && gofmt -l . && exit 1)
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test
-        run: go test ./...
+          if [ -d "deploy/helm" ]; then
+            helm lint deploy/helm
+          else
+            echo "deploy/helm not found, skipping"
+          fi
