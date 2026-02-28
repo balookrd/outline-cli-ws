@@ -17,8 +17,6 @@ import (
 	"golang.org/x/net/quic"
 )
 
-var errRFC9220NotSupported = fmt.Errorf("rfc9220 not supported")
-
 const (
 	h3FrameData                    = 0x0
 	h3FrameHeaders                 = 0x1
