@@ -97,6 +97,7 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		ok := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
 		cur.mu.Unlock()
 		if ok {
+			observeSelection(cur.cfg.Name, "tcp")
 			return cur, nil
 		}
 	}
@@ -129,6 +130,9 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		lb.current = best
 		lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 		lb.mu.Unlock()
+		observeSelection(best.cfg.Name, "tcp")
+	} else {
+		observeSelection(best.cfg.Name, "udp")
 	}
 
 	return best, nil
@@ -277,6 +281,8 @@ func (lb *LoadBalancer) ReportTCPFailure(s *UpstreamState, err error) {
 	s.tcp.nextHC = now.Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
 	s.mu.Unlock()
 
+	observeFailure(s.cfg.Name, "tcp", err)
+
 	// сбрасываем sticky
 	lb.mu.Lock()
 	if lb.current == s {
@@ -302,6 +308,8 @@ func (lb *LoadBalancer) ReportUDPFailure(s *UpstreamState, err error) {
 	s.udp.hcEvery = lb.hc.MinInterval
 	s.udp.nextHC = now.Add(applyJitter(lb.hc.MinInterval, lb.hc.Jitter))
 	s.mu.Unlock()
+
+	observeFailure(s.cfg.Name, "udp", err)
 }
 
 func (lb *LoadBalancer) pickTopN(now time.Time, n int) []*UpstreamState {
@@ -474,6 +482,7 @@ func (lb *LoadBalancer) applyHCResult(h *hcState, err error, rtt time.Duration,
 				log.Printf("[HC|%s] %s DOWN: %v", proto, name, err)
 			}
 			h.healthy = false
+			setHealthy(name, proto, false)
 		}
 
 		h.hcEvery = lb.nextIntervalOnFailure(*h)
@@ -498,6 +507,7 @@ func (lb *LoadBalancer) applyHCResult(h *hcState, err error, rtt time.Duration,
 			log.Printf("[HC|%s] %s UP (rtt=%s)", proto, name, h.rttEWMA)
 		}
 		h.healthy = true
+		setHealthy(name, proto, true)
 	}
 
 	h.hcEvery = lb.nextIntervalOnSuccess(*h)

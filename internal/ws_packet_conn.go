@@ -32,6 +32,7 @@ func (w *WSPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			continue
 		}
 		n := copy(p, data)
+		observeWSFrame("in", n)
 		return n, dummyAddr{}, nil
 	}
 }
@@ -40,6 +41,7 @@ func (w *WSPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	if err := w.c.Write(w.ctx, WSMessageBinary, p); err != nil {
 		return 0, err
 	}
+	observeWSFrame("out", len(p))
 	return len(p), nil
 }
 
