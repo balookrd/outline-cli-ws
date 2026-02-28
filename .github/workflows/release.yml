@@ -47,7 +47,7 @@ jobs:
             go build -trimpath -ldflags "-s -w" -o "${BIN}-${{ matrix.os }}-${{ matrix.arch }}${EXT}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: outline-cli-ws-${{ matrix.os }}-${{ matrix.arch }}
           path: outline-cli-ws-*
