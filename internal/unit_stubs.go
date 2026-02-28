@@ -59,6 +59,10 @@ func dialRFC8441RawH2(ctx context.Context, u *url.URL, tr *http.Transport) (WSCo
 	return nil, ErrNotImplemented
 }
 
+func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
+	return nil, ErrNotImplemented
+}
+
 // rfc8441Debug is used for verbose logging in ws_h2.go.
 var rfc8441Debug = false
 

@@ -16,9 +16,10 @@ import (
 
 // DialWSStream dials a websocket endpoint.
 //
-// It supports two handshakes:
+// It supports three handshakes:
 //  1. Classic HTTP/1.1 upgrade (always available)
-//  2. WebSocket over HTTP/2 (RFC 8441, Extended CONNECT) when enabled.
+//  2. WebSocket over HTTP/2 (RFC 8441, Extended CONNECT) when enabled
+//  3. WebSocket over HTTP/3 (RFC 9220, Extended CONNECT) when enabled.
 //
 // HTTP/2 Extended CONNECT support in Go has historically been gated behind
 // a GODEBUG flag in some toolchain versions (see golang/go#53208 referenced by
@@ -66,14 +67,21 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 
 	tryH2, h2Only, tryH3, h3Only := parseTransportHints(u.Query())
 
-	if h3Only {
-		log.Printf("[WS] upstream %q requested h3-only mode; falling back to h2/http1 because native h3 client transport is unavailable in this build", u.Redacted())
-	}
-	if tryH3 {
-		log.Printf("[WS] upstream %q requested ws-over-quic mode; trying h2/http1 compatibility dial path", u.Redacted())
+	if tryH3 && isWebSocketLikeScheme(u.Scheme) {
+		h3c, h3err := dialRFC9220(ctx, u)
+		if h3err == nil {
+			observeDial(upstream, proto, time.Since(start))
+			return h3c, nil
+		}
+		if h3Only {
+			return nil, fmt.Errorf("h3-only connect failed: %w", h3err)
+		}
+		log.Printf("[WS] upstream %q requested ws-over-quic mode, h3 failed (%v), trying h2/http1 fallback", u.Redacted(), h3err)
 		if !tryH2 {
 			tryH2 = true
 		}
+	} else if h3Only {
+		return nil, fmt.Errorf("h3-only mode requires ws/wss URL, got scheme=%q", u.Scheme)
 	}
 
 	if h2Only {

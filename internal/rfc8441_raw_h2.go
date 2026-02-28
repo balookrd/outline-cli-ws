@@ -311,6 +311,10 @@ func cleanedRequestURI(u *url.URL) string {
 	q.Del("http2")
 	q.Del("h2only")
 	q.Del("h2c")
+	q.Del("h3")
+	q.Del("http3")
+	q.Del("h3only")
+	q.Del("quic")
 
 	// Rebuild a copy so we don't mutate caller URL.
 	path := u.EscapedPath()
