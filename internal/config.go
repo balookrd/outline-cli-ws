@@ -92,67 +92,67 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Listen.SOCKS5 == "" {
 		c.Listen.SOCKS5 = "127.0.0.1:1080"
 	}
-	if c.Tun.MTU == 0 {
+	if c.Tun.MTU <= 0 {
 		c.Tun.MTU = 1500
 	}
-	if c.Tun.UDPMaxFlows == 0 {
+	if c.Tun.UDPMaxFlows <= 0 {
 		c.Tun.UDPMaxFlows = 4096
 	}
-	if c.Tun.UDPIdleTimeout == 0 {
+	if c.Tun.UDPIdleTimeout <= 0 {
 		c.Tun.UDPIdleTimeout = 60 * time.Second
 	}
-	if c.Tun.UDPGCInterval == 0 {
+	if c.Tun.UDPGCInterval <= 0 {
 		c.Tun.UDPGCInterval = 10 * time.Second
 	}
-	if c.Tun.UDPFlowIdleTimeout == 0 {
+	if c.Tun.UDPFlowIdleTimeout <= 0 {
 		c.Tun.UDPFlowIdleTimeout = 30 * time.Second
 	}
-	if c.Tun.UDPMaxDstPerPort == 0 {
+	if c.Tun.UDPMaxDstPerPort <= 0 {
 		c.Tun.UDPMaxDstPerPort = 512
 	}
-	if c.Healthcheck.Interval == 0 {
+	if c.Healthcheck.Interval <= 0 {
 		c.Healthcheck.Interval = 5 * time.Second
 	}
-	if c.Healthcheck.Timeout == 0 {
+	if c.Healthcheck.Timeout <= 0 {
 		c.Healthcheck.Timeout = 3 * time.Second
 	}
-	if c.Healthcheck.FailThreshold == 0 {
+	if c.Healthcheck.FailThreshold <= 0 {
 		c.Healthcheck.FailThreshold = 2
 	}
-	if c.Healthcheck.SuccessThreshold == 0 {
+	if c.Healthcheck.SuccessThreshold <= 0 {
 		c.Healthcheck.SuccessThreshold = 1
 	}
-	if c.Healthcheck.MinInterval == 0 {
+	if c.Healthcheck.MinInterval <= 0 {
 		c.Healthcheck.MinInterval = 1 * time.Second
 	}
-	if c.Healthcheck.MaxInterval == 0 {
+	if c.Healthcheck.MaxInterval <= 0 {
 		c.Healthcheck.MaxInterval = 30 * time.Second
 	}
-	if c.Healthcheck.Jitter == 0 {
+	if c.Healthcheck.Jitter <= 0 {
 		c.Healthcheck.Jitter = 200 * time.Millisecond
 	}
-	if c.Healthcheck.BackoffFactor == 0 {
+	if c.Healthcheck.BackoffFactor <= 0 {
 		c.Healthcheck.BackoffFactor = 1.6
 	}
-	if c.Healthcheck.RTTScale == 0 {
+	if c.Healthcheck.RTTScale <= 0 {
 		c.Healthcheck.RTTScale = 0.25
 	}
-	if c.Selection.StickyTTL == 0 {
+	if c.Selection.StickyTTL <= 0 {
 		c.Selection.StickyTTL = 60 * time.Second
 	}
-	if c.Selection.Cooldown == 0 {
+	if c.Selection.Cooldown <= 0 {
 		c.Selection.Cooldown = 20 * time.Second
 	}
-	if c.Selection.MinSwitch == 0 {
+	if c.Selection.MinSwitch <= 0 {
 		c.Selection.MinSwitch = 20 * time.Millisecond
 	}
-	if c.Selection.WarmStandbyN == 0 {
+	if c.Selection.WarmStandbyN <= 0 {
 		c.Selection.WarmStandbyN = 2
 	}
-	if c.Selection.WarmStandbyInterval == 0 {
+	if c.Selection.WarmStandbyInterval <= 0 {
 		c.Selection.WarmStandbyInterval = 2 * time.Second
 	}
-	if c.Probe.Timeout == 0 {
+	if c.Probe.Timeout <= 0 {
 		c.Probe.Timeout = 2 * time.Second
 	}
 	if c.Probe.TCPTarget == "" {
