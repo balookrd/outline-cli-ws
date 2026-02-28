@@ -12,9 +12,11 @@
 2. Create feature branch
 3. Add tests
 4. Ensure:
-
+```
+   golangci-lint run --timeout=5m
    go test ./... -tags unit
-
+   go test ./...
+```
 5. Submit PR
 
 ## Coding Standards

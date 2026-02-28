@@ -12,8 +12,6 @@ FROM gcr.io/distroless/base-debian12
 WORKDIR /app
 COPY --from=builder /app/outline-cli-ws .
 
-EXPOSE 9100
-
 USER nonroot:nonroot
 
 ENTRYPOINT ["/app/outline-cli-ws"]

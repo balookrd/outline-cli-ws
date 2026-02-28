@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -32,10 +33,12 @@ import (
 // and forbids the HTTP/1 Connection/Upgrade headers.
 // See RFC 8441 Sections 4–5.
 func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, error) {
+	start := time.Now()
 	u, err := url.Parse(rawurl)
 	if err != nil {
 		return nil, err
 	}
+	upstream, proto := upstreamFromURL(u)
 
 	// Shared dialer with fwmark support.
 	d := &net.Dialer{
@@ -77,6 +80,7 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		}
 		h2c, h2err := dialRFC8441(ctx, u, tr)
 		if h2err == nil {
+			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
 		return nil, fmt.Errorf("h2-only connect failed: %w", h2err)
@@ -85,6 +89,7 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	if tryH2 && (u.Scheme == "wss" || u.Scheme == "ws") {
 		h2c, h2err := dialRFC8441(ctx, u, tr)
 		if h2err == nil {
+			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
 		// Only fall back on "not supported" style errors; otherwise surface.
@@ -95,7 +100,26 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 
 	// Classic websocket (HTTP/1.1 upgrade).
-	return dialCoderWebSocket(ctx, u.String(), tr)
+	c, err := dialCoderWebSocket(ctx, u.String(), tr)
+	if err != nil {
+		return nil, err
+	}
+	observeDial(upstream, proto, time.Since(start))
+	return c, nil
+}
+
+func upstreamFromURL(u *url.URL) (name, proto string) {
+	if u == nil {
+		return "unknown", "tcp"
+	}
+	name = u.Host
+	if name == "" {
+		name = "unknown"
+	}
+	if strings.Contains(strings.ToLower(u.Path), "udp") {
+		return name, "udp"
+	}
+	return name, "tcp"
 }
 
 // ProbeWSS verifies the websocket handshake succeeds.

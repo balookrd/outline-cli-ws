@@ -16,7 +16,9 @@ import (
 
 func main() {
 	var cfgPath string
+	var metricsAddr string
 	flag.StringVar(&cfgPath, "c", "config.yaml", "config path")
+	flag.StringVar(&metricsAddr, "metrics", "", "prometheus metrics listen address, e.g. :9100")
 	flag.Parse()
 
 	cfg, err := outlinews.LoadConfig(cfgPath)
@@ -28,6 +30,16 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if metricsAddr != "" {
+		outlinews.EnablePrometheusMetrics()
+		go func() {
+			if err := outlinews.StartMetricsServer(ctx, metricsAddr); err != nil {
+				log.Printf("metrics server stopped: %v", err)
+			}
+		}()
+		log.Printf("Prometheus metrics listening on %s", metricsAddr)
+	}
 
 	// Health-check loop
 	go lb.RunHealthChecks(ctx)

@@ -46,3 +46,13 @@ type Socks5Server = internal.Socks5Server
 func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	return internal.RunTunNative(ctx, cfg, lb)
 }
+
+// EnablePrometheusMetrics registers and enables default Prometheus metrics.
+func EnablePrometheusMetrics() {
+	internal.EnablePrometheusMetrics()
+}
+
+// StartMetricsServer serves /metrics on the provided address until context cancellation.
+func StartMetricsServer(ctx context.Context, addr string) error {
+	return internal.StartMetricsServer(ctx, addr)
+}

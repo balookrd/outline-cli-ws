@@ -143,7 +143,7 @@ GODEBUG=http2xconnect=1
 Enable detailed transport logs:
 
 ```
-OUTLINE_WS_DEBUG=1 ./outline-ws-lb -c config.yaml
+OUTLINE_WS_DEBUG=1 ./outline-cli-ws -c config.yaml
 ```
 
 Shows:
@@ -167,9 +167,9 @@ Requires:
 
 ```
 git clone <repo>
-cd outline-ws-lb
+cd outline-cli-ws
 go mod tidy
-go build -o outline-ws-lb ./cmd/outline-cli-ws
+go build -o outline-cli-ws ./cmd/outline-cli-ws
 ```
 
 ---
@@ -178,7 +178,7 @@ go build -o outline-ws-lb ./cmd/outline-cli-ws
 
 ```
 cp examples/config.example.yaml config.yaml
-./outline-ws-lb -c config.yaml
+./outline-cli-ws -c config.yaml
 ```
 
 Default SOCKS5:
@@ -400,3 +400,18 @@ Run with metrics enabled:
 ```
 
 Then scrape `http://localhost:9100/metrics`.
+
+## Grafana dashboard
+
+Ready-to-import dashboard JSON is available in:
+
+* `examples/outlinews_grafana_dashboard_plain.json`
+* `examples/outlinews_grafana_dashboard_api.json`
+
+Or run the full monitoring stack via Docker Compose (OutlineWS + Prometheus + Grafana):
+
+```bash
+docker compose up --build
+```
+
+Provisioned files are in `deploy/prometheus` and `deploy/grafana`.
