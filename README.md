@@ -381,3 +381,22 @@ Instant failover without cold handshake.
 GNU GENERAL PUBLIC LICENSE Version 3
 
 ---
+
+## Unit tests
+
+These tests can run **offline** using the `unit` build tag (it excludes external networking/TUN dependencies):
+
+```bash
+go test ./... -tags unit
+```
+
+
+## Prometheus metrics
+
+Run with metrics enabled:
+
+```bash
+./outline-cli-ws -c config.yaml -metrics :9100
+```
+
+Then scrape `http://localhost:9100/metrics`.

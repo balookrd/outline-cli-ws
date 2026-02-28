@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  outlinews:
+    build: .
+    container_name: outlinews
+    command: ["-c", "/config/config.yaml", "-metrics", ":9100"]
+    volumes:
+      - ./config:/config
+    ports:
+      - "9100:9100"
+    restart: always
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
