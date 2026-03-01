@@ -4,8 +4,7 @@ listen:
 fwmark: 0
 
 tun:
-  enable: false
-  device: "tun0"
+  device: "" # empty = TUN disabled; set e.g. "tun0" to enable
   mtu: 1500
   netns: "" # optional: network namespace path for tun device, e.g. /var/run/netns/tun
   debug: false # extra TUN flow logs (helps troubleshoot netns/routing/DNS)

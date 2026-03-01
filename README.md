@@ -234,13 +234,15 @@ cp examples/config.example.yaml config.yaml
 ./outline-cli-ws -c config.yaml
 ```
 
-Default SOCKS5:
+SOCKS5 in `examples/config.example.yaml`:
 
 ```
 127.0.0.1:1080
 ```
 
-Test:
+If `listen.socks5` is empty, SOCKS5 listener is not started.
+
+Test (when SOCKS5 is enabled):
 
 ```
 curl -x socks5h://127.0.0.1:1080 https://ifconfig.me
@@ -392,7 +394,6 @@ When enabled, outbound packets entering the TUN interface are handled by the emb
 
 ```yaml
 tun:
-  enable: true
   device: "tun0"
   mtu: 1500
   netns: "" # optional Linux netns path, e.g. /var/run/netns/tun
@@ -401,8 +402,7 @@ tun:
 
 ## What each field means
 
-* `tun.enable` — turns TUN mode on/off.
-* `tun.device` — interface name to open (must already exist before startup).
+* `tun.device` — interface name to open (must already exist before startup; if empty, TUN mode is disabled).
 * `tun.mtu` — link MTU (defaults to interface MTU or 1500 if unavailable).
 * `tun.netns` — optional Linux network namespace path where the TUN device exists (for example `/var/run/netns/tun`).
 * `tun.debug` — enables extra TUN diagnostics in logs (flows, DNS-forward path, read/write errors).
@@ -419,7 +419,7 @@ Additional optional tuning keys (if present in your config schema/build):
 2. (Optional) if the TUN device lives in a separate netns, set `tun.netns` to that namespace path.
 3. Assign IPv4/IPv6 addresses to that interface.
 4. Add route rules so selected/default traffic goes via `tun0`.
-5. Start `outline-cli-ws` with `tun.enable: true` and matching `tun.device`.
+5. Start `outline-cli-ws` with matching `tun.device` (non-empty enables TUN mode).
 6. Verify no routing loops (use `fwmark` policy routing when needed).
 
 ## Operational notes
@@ -429,6 +429,76 @@ Additional optional tuning keys (if present in your config schema/build):
 * With `tun.netns`, the app temporarily enters that namespace only to open the TUN device, then returns to the original namespace for upstream/probe sockets (global routing table).
 * Health checks, balancing, and failover logic remain active in TUN mode.
 * For app-by-app routing, SOCKS5 mode may be simpler than full-system TUN routing.
+
+## Docker example (TUN-enabled)
+
+Because TUN mode needs privileged networking operations, run the container with:
+
+* `--cap-add=NET_ADMIN`
+* access to `/dev/net/tun`
+* `--user root`
+* `--network host` (so the pre-created `tun0` in host netns is visible)
+
+Example:
+
+```bash
+# 1) Pre-create and configure tun0 on host
+sudo ip tuntap add dev tun0 mode tun
+sudo ip addr add 10.250.0.1/24 dev tun0
+sudo ip link set tun0 up mtu 1500
+
+# 2) Start outline-cli-ws with TUN support
+docker run --rm \
+  --name outlinews-tun \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --user root \
+  -v "$(pwd)/config:/config:ro" \
+  ghcr.io/<your-org>/outline-cli-ws:latest \
+  -c /config/config.yaml -metrics :9100
+```
+
+Minimal TUN config fragment:
+
+```yaml
+tun:
+  device: "tun0"
+  mtu: 1500
+```
+
+If you route default traffic into `tun0`, configure `fwmark` policy routing to avoid loops.
+
+### If you use `tun.netns` inside Docker
+
+Error like:
+
+```text
+setns("/var/run/netns/outlinens"): operation not permitted
+```
+
+means the container cannot switch network namespaces. For `tun.netns` you usually also need:
+
+* `--cap-add SYS_ADMIN` (required for `setns`)
+* bind-mount of namespace handles, e.g. `-v /var/run/netns:/var/run/netns:ro`
+
+Example (`tun.netns: "/var/run/netns/outlinens"`):
+
+```bash
+docker run --rm \
+  --name outlinews-tun-netns \
+  --network host \
+  --cap-add NET_ADMIN \
+  --cap-add SYS_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --user root \
+  -v /var/run/netns:/var/run/netns:ro \
+  -v "$(pwd)/config:/config:ro" \
+  ghcr.io/<your-org>/outline-cli-ws:latest \
+  -c /config/config.yaml -metrics :9100
+```
+
+If your runtime/security profile still blocks `setns` (seccomp/AppArmor/SELinux), run with a permissive profile for troubleshooting or avoid `tun.netns` and use host namespace `tun0`.
 
 ---
 

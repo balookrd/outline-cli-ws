@@ -45,17 +45,33 @@ func main() {
 	go lb.RunHealthChecks(ctx)
 	go lb.RunWarmStandby(ctx)
 
-	// SOCKS5 server
-	addr := cfg.Listen.SOCKS5
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatalf("listen socks5 %s: %v", addr, err)
+	socksAddr := cfg.Listen.SOCKS5
+	socksEnabled := socksAddr != ""
+	tunEnabled := cfg.Tun.Device != ""
+
+	if !socksEnabled && !tunEnabled {
+		log.Fatal("nothing to run: neither listen.socks5 nor tun.device is configured")
 	}
-	log.Printf("SOCKS5 listening on %s", addr)
+	if tunEnabled && !socksEnabled && cfg.Tun.NetNS == "" {
+		if _, err := net.InterfaceByName(cfg.Tun.Device); err != nil {
+			log.Fatalf("tun-only mode requires existing interface %q: %v", cfg.Tun.Device, err)
+		}
+	}
 
-	srv := &outlinews.Socks5Server{LB: lb}
+	var ln net.Listener
+	var srv *outlinews.Socks5Server
+	if socksEnabled {
+		ln, err = net.Listen("tcp", socksAddr)
+		if err != nil {
+			log.Fatalf("listen socks5 %s: %v", socksAddr, err)
+		}
+		log.Printf("SOCKS5 listening on %s", socksAddr)
+		srv = &outlinews.Socks5Server{LB: lb}
+	} else {
+		log.Printf("SOCKS5 disabled: listen.socks5 is empty")
+	}
 
-	if cfg.Tun.Enable {
+	if tunEnabled {
 		log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Tun.Device)
 
 		go func() {
@@ -73,8 +89,15 @@ func main() {
 		<-sigc
 		log.Printf("shutting down...")
 		cancel()
-		_ = ln.Close()
+		if ln != nil {
+			_ = ln.Close()
+		}
 	}()
+
+	if !socksEnabled {
+		<-ctx.Done()
+		return
+	}
 
 	for {
 		c, err := ln.Accept()

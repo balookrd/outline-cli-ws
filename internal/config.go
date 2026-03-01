@@ -24,7 +24,6 @@ type Config struct {
 }
 
 type TunConfig struct {
-	Enable bool   `yaml:"enable"`
 	Device string `yaml:"device"`
 	MTU    int    `yaml:"mtu"`
 	NetNS  string `yaml:"netns"` // optional path to target network namespace (Linux), e.g. /var/run/netns/vpn
@@ -60,8 +59,8 @@ type SelectionConfig struct {
 }
 
 type UpstreamConfig struct {
-	Name   string `yaml:"name"`
-	Weight int    `yaml:"weight"`
+	Name   string  `yaml:"name"`
+	Weight float64 `yaml:"weight"`
 
 	TCPWSS string `yaml:"tcp_wss"`
 	UDPWSS string `yaml:"udp_wss"`
@@ -90,9 +89,6 @@ func LoadConfig(path string) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, err
-	}
-	if c.Listen.SOCKS5 == "" {
-		c.Listen.SOCKS5 = "127.0.0.1:1080"
 	}
 	if c.Tun.MTU == 0 {
 		c.Tun.MTU = 1500
