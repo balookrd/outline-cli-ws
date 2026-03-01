@@ -8,6 +8,7 @@ tun:
   device: "tun0"
   mtu: 1500
   netns: "" # optional: network namespace path for tun device, e.g. /var/run/netns/tun
+  debug: false # extra TUN flow logs (helps troubleshoot netns/routing/DNS)
   udp_max_flows: 4096
   udp_max_dst_per_port: 512
   udp_idle_timeout: 60s

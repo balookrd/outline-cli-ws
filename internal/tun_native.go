@@ -91,6 +91,17 @@ func withNetNS(path string, fn func() error) error {
 	return fn()
 }
 
+func tunDebugf(enabled bool, format string, args ...any) {
+	if enabled {
+		log.Printf("tun debug: "+format, args...)
+	}
+}
+
+func isDNSDestination(dst string) bool {
+	_, port, err := net.SplitHostPort(dst)
+	return err == nil && port == "53"
+}
+
 // ----- Main -----
 
 func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
@@ -115,6 +126,9 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Device)
 	if cfg.NetNS != "" {
 		log.Printf("TUN netns enabled: opening %q inside %q", cfg.Device, cfg.NetNS)
+	}
+	if cfg.Debug {
+		log.Printf("TUN debug logging is enabled")
 	}
 
 	var (
@@ -182,7 +196,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		}
 		r.Complete(false)
 
-		go tunHandleTCP(ctx, lb, epTCP, id, &wq)
+		go tunHandleTCP(ctx, lb, epTCP, id, &wq, cfg.Debug)
 	})
 	st.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
@@ -195,14 +209,14 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		if err != nil {
 			return
 		}
-		go tunHandleUDP(ctx, lb, portTable, epUDP, id, &wq)
+		go tunHandleUDP(ctx, lb, portTable, epUDP, id, &wq, cfg.Debug)
 	})
 	st.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 
 	// Pumps
 	errCh := make(chan error, 2)
-	go func() { errCh <- tunToStack(ctx, ifce, ep) }()
-	go func() { errCh <- stackToTun(ctx, ifce, ep) }()
+	go func() { errCh <- tunToStack(ctx, ifce, ep, cfg.Debug) }()
+	go func() { errCh <- stackToTun(ctx, ifce, ep, cfg.Debug) }()
 
 	select {
 	case <-ctx.Done():
@@ -212,7 +226,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	}
 }
 
-func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint) error {
+func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint, debug bool) error {
 	buf := make([]byte, 65535)
 	for {
 		select {
@@ -223,6 +237,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 
 		n, err := ifce.Read(buf)
 		if err != nil {
+			tunDebugf(debug, "read from tun failed: %v", err)
 			return err
 		}
 		pkt := buf[:n]
@@ -234,6 +249,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		case 6:
 			proto = ipv6.ProtocolNumber
 		default:
+			tunDebugf(debug, "drop packet with unknown L3 version (len=%d)", len(pkt))
 			continue
 		}
 
@@ -245,7 +261,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 	}
 }
 
-func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint) error {
+func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint, debug bool) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -263,25 +279,29 @@ func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		pb.DecRef()
 
 		if _, err := ifce.Write(b); err != nil {
+			tunDebugf(debug, "write to tun failed: %v", err)
 			return err
 		}
 	}
 }
 
-func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
+func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue, debug bool) {
 	defer epTCP.Close()
 
 	nsConn := gonet.NewTCPConn(wq, epTCP)
 	defer nsConn.Close()
 
 	dst := net.JoinHostPort(net.IP(id.RemoteAddress.AsSlice()).String(), fmt.Sprintf("%d", id.RemotePort))
+	tunDebugf(debug, "tcp flow: %s:%d -> %s", net.IP(id.LocalAddress.AsSlice()).String(), id.LocalPort, dst)
 
 	up, err := lb.PickTCP()
 	if err != nil {
+		tunDebugf(debug, "PickTCP failed for dst=%s: %v", dst, err)
 		return
 	}
 	out, err := DialOutlineTCP(ctx, lb, up, dst)
 	if err != nil {
+		tunDebugf(debug, "DialOutlineTCP failed dst=%s via upstream=%s: %v", dst, up.cfg.Name, err)
 		lb.ReportTCPFailure(up, err)
 		return
 	}
@@ -296,7 +316,7 @@ func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, i
 	_, _ = io.Copy(nsConn, out)
 }
 
-func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
+func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue, debug bool) {
 	defer epUDP.Close()
 
 	nsUDP := gonet.NewUDPConn(wq, epUDP)
@@ -315,6 +335,9 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		dstAddr = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
 	}
 	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.RemotePort))
+	if cfgDNS := isDNSDestination(dst); cfgDNS || debug {
+		tunDebugf(true, "udp flow: %s:%d -> %s", srcIP.String(), id.LocalPort, dst)
+	}
 
 	pk := udpPortKey{
 		netProto: 4,
@@ -327,6 +350,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 
 	ps, err := pt.getOrCreate(ctx, pk)
 	if err != nil {
+		tunDebugf(true, "udp session create failed for %s:%d -> %s: %v", srcIP.String(), id.LocalPort, dst, err)
 		return
 	}
 
@@ -339,6 +363,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 			maxDst = 512
 		}
 		if len(ps.flows) >= maxDst {
+			tunDebugf(debug, "udp drop flow %s: max dst per port reached (%d)", dst, maxDst)
 			ps.mu.Unlock()
 			return
 		}
@@ -354,9 +379,14 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 					return
 				case p, ok := <-replyCh:
 					if !ok {
+						tunDebugf(debug, "udp reply channel closed for dst=%s", dst)
 						return
 					}
-					_, _ = nsUDP.Write(p.B)
+					if _, err := nsUDP.Write(p.B); err != nil {
+						tunDebugf(true, "udp write back to stack failed dst=%s: %v", dst, err)
+						p.Release()
+						return
+					}
 					p.Release()
 
 					now := time.Now()
@@ -380,6 +410,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	for {
 		n, _, err := nsUDP.ReadFrom(buf)
 		if err != nil {
+			tunDebugf(debug, "udp read from stack failed dst=%s: %v", dst, err)
 			break
 		}
 		if n == 0 {
@@ -387,8 +418,12 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		}
 
 		if err := ps.sess.Send(dst, buf[:n]); err != nil {
+			tunDebugf(true, "udp send to outline failed dst=%s len=%d upstream=%s: %v", dst, n, ps.up.cfg.Name, err)
 			lb.ReportUDPFailure(ps.up, err)
 			break
+		}
+		if isDNSDestination(dst) && (debug || n > 0) {
+			tunDebugf(true, "udp dns query forwarded dst=%s len=%d", dst, n)
 		}
 
 		now := time.Now()
@@ -408,4 +443,5 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	delete(ps.flows, dst)
 	ps.mu.Unlock()
 	ps.sess.Unsubscribe(dst)
+	tunDebugf(debug, "udp flow closed: %s", dst)
 }

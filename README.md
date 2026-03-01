@@ -396,6 +396,7 @@ tun:
   device: "tun0"
   mtu: 1500
   netns: "" # optional Linux netns path, e.g. /var/run/netns/tun
+  debug: false # optional extra TUN diagnostics (UDP/DNS/TCP flow logs)
 ```
 
 ## What each field means
@@ -404,6 +405,7 @@ tun:
 * `tun.device` — interface name to open (must already exist before startup).
 * `tun.mtu` — link MTU (defaults to interface MTU or 1500 if unavailable).
 * `tun.netns` — optional Linux network namespace path where the TUN device exists (for example `/var/run/netns/tun`).
+* `tun.debug` — enables extra TUN diagnostics in logs (flows, DNS-forward path, read/write errors).
 
 Additional optional tuning keys (if present in your config schema/build):
 
