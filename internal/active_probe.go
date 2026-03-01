@@ -30,7 +30,7 @@ func ProbeTCPQuality(ctx context.Context, up UpstreamConfig, target string, fwma
 	}
 	defer wsc.Close(WSStatusNormalClosure, "tcp-probe")
 
-	wsconn := NewWSStreamConn(ctx, wsc)
+	wsconn := NewWSStreamConn(ctx, wsc, up.Name, "tcp")
 	ssconn := ciph.StreamConn(wsconn)
 	defer ssconn.Close()
 

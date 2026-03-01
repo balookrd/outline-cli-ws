@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -122,5 +123,56 @@ func TestWSPacketConn_Close(t *testing.T) {
 	defer m.mu.Unlock()
 	if !m.closed {
 		t.Fatalf("expected closed")
+	}
+}
+
+func TestWSStreamConn_ObservesTrafficMetrics(t *testing.T) {
+	metricsMu.Lock()
+	metrics = telemetry{}
+	metricsMu.Unlock()
+	EnablePrometheusMetrics()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	m := &mockWSConn{}
+	m.enqueueRead(WSMessageBinary, []byte("hello"), nil)
+
+	sc := NewWSStreamConn(ctx, m, "edge-1", "tcp")
+
+	buf := make([]byte, 16)
+	n, err := sc.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("expected n=5, got %d", n)
+	}
+
+	if _, err := sc.Write([]byte("world!")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+
+	if got := metrics.wsBytes["dir=in"]; got != 5 {
+		t.Fatalf("ws in bytes=%d want 5", got)
+	}
+	if got := metrics.wsBytes["dir=out"]; got != 6 {
+		t.Fatalf("ws out bytes=%d want 6", got)
+	}
+	if got := metrics.upstreamBytes["upstream=edge-1,proto=tcp,dir=in"]; got != 5 {
+		t.Fatalf("upstream in bytes=%d want 5", got)
+	}
+	if got := metrics.upstreamBytes["upstream=edge-1,proto=tcp,dir=out"]; got != 6 {
+		t.Fatalf("upstream out bytes=%d want 6", got)
+	}
+
+	m.mu.Lock()
+	writes := m.writes
+	m.mu.Unlock()
+	if len(writes) != 1 || writes[0].typ != WSMessageBinary || !strings.Contains(string(writes[0].data), "world") {
+		t.Fatalf("unexpected writes: %+v", writes)
 	}
 }
