@@ -60,7 +60,7 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 		return nil, err
 	}
 
-	wsPC := NewWSPacketConn(ctx, wsc)
+	wsPC := NewWSPacketConn(ctx, wsc, up.cfg.Name, "udp")
 	encPC := ciph.PacketConn(wsPC)
 
 	s := &OutlineUDPSession{

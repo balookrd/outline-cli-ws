@@ -49,7 +49,7 @@ func NewUDPAssociation(parent context.Context, up UpstreamConfig, fwmark uint32)
 	}
 
 	// Underlying packet transport: WS binary message <-> datagram bytes
-	wsPC := NewWSPacketConn(ctx, wsc)
+	wsPC := NewWSPacketConn(ctx, wsc, up.Name, "udp")
 
 	// Encrypted PacketConn: WriteTo expects plaintext (addr+payload), ReadFrom returns plaintext
 	encPC := ciph.PacketConn(wsPC)

@@ -89,3 +89,30 @@ func TestTunMetricsExposed(t *testing.T) {
 		}
 	}
 }
+
+func TestUpstreamTrafficMetricsExposed(t *testing.T) {
+	metricsMu.Lock()
+	metrics = telemetry{}
+	metricsMu.Unlock()
+
+	EnablePrometheusMetrics()
+	observeUpstreamTraffic("edge-1", "udp", "in", 512)
+	observeUpstreamTraffic("edge-1", "udp", "out", 768)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	metricsHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metricsHandler status=%d want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"outlinews_upstream_bytes_total{upstream=\"edge-1\",proto=\"udp\",dir=\"in\"} 512",
+		"outlinews_upstream_bytes_total{upstream=\"edge-1\",proto=\"udp\",dir=\"out\"} 768",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics output missing %q\nbody:\n%s", want, body)
+		}
+	}
+}

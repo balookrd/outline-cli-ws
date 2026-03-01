@@ -69,7 +69,7 @@ func TestWSPacketConn_ReadFrom_SkipsNonBinary(t *testing.T) {
 	m.enqueueRead(WSMessageText, []byte("hi"), nil)
 	m.enqueueRead(WSMessageBinary, []byte{1, 2, 3}, nil)
 
-	pc := NewWSPacketConn(ctx, m)
+	pc := NewWSPacketConn(ctx, m, "test-upstream", "udp")
 	buf := make([]byte, 10)
 
 	n, _, err := pc.ReadFrom(buf)
@@ -88,7 +88,7 @@ func TestWSPacketConn_WriteTo_WritesBinary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	m := &mockWSConn{}
-	pc := NewWSPacketConn(ctx, m)
+	pc := NewWSPacketConn(ctx, m, "test-upstream", "udp")
 
 	payload := []byte("hello")
 	n, err := pc.WriteTo(payload, nil)
@@ -115,7 +115,7 @@ func TestWSPacketConn_WriteTo_WritesBinary(t *testing.T) {
 func TestWSPacketConn_Close(t *testing.T) {
 	ctx := context.Background()
 	m := &mockWSConn{}
-	pc := NewWSPacketConn(ctx, m)
+	pc := NewWSPacketConn(ctx, m, "test-upstream", "udp")
 	_ = pc.Close()
 
 	m.mu.Lock()
