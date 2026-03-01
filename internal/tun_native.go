@@ -362,8 +362,8 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		dstAddr = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
 	}
 	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.LocalPort))
-	if cfgDNS := isDNSDestination(dst); cfgDNS || debug {
-		tunDebugf(true, "udp flow: %s:%d -> %s", srcIP.String(), id.RemotePort, dst)
+	if debug {
+		tunDebugf(debug, "udp flow: %s:%d -> %s", srcIP.String(), id.RemotePort, dst)
 	}
 
 	pk := udpPortKey{
@@ -377,7 +377,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 
 	ps, err := pt.getOrCreate(ctx, pk)
 	if err != nil {
-		tunDebugf(true, "udp session create failed for %s:%d -> %s: %v", srcIP.String(), id.LocalPort, dst, err)
+		tunDebugf(debug, "udp session create failed for %s:%d -> %s: %v", srcIP.String(), id.LocalPort, dst, err)
 		return
 	}
 
@@ -410,7 +410,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 						return
 					}
 					if _, err := nsUDP.Write(p.B); err != nil {
-						tunDebugf(true, "udp write back to stack failed dst=%s: %v", dst, err)
+						tunDebugf(debug, "udp write back to stack failed dst=%s: %v", dst, err)
 						p.Release()
 						return
 					}
@@ -446,12 +446,12 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 
 		if err := ps.sess.Send(dst, buf[:n]); err != nil {
 			observeTunError("udp_send")
-			tunDebugf(true, "udp send to outline failed dst=%s len=%d upstream=%s: %v", dst, n, ps.up.cfg.Name, err)
+			tunDebugf(debug, "udp send to outline failed dst=%s len=%d upstream=%s: %v", dst, n, ps.up.cfg.Name, err)
 			lb.ReportUDPFailure(ps.up, err)
 			break
 		}
-		if isDNSDestination(dst) && (debug || n > 0) {
-			tunDebugf(true, "udp dns query forwarded dst=%s len=%d", dst, n)
+		if debug && isDNSDestination(dst) {
+			tunDebugf(debug, "udp dns query forwarded dst=%s len=%d", dst, n)
 		}
 
 		now := time.Now()

@@ -34,34 +34,30 @@
         "x": 0,
         "y": 0
       },
+      "id": 1,
       "panels": [],
-      "title": "Overview",
-      "type": "row",
-      "id": 1
+      "title": "Fleet overview",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "Rate of upstream selections across all upstreams (proxy of connection attempts/choices).",
+      "description": "Current upstream throughput for selected instances/upstreams/protocols.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
+          "decimals": 2,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
               }
             ]
           },
-          "unit": "ops"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -71,6 +67,7 @@
         "x": 0,
         "y": 1
       },
+      "id": 2,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -92,44 +89,34 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(outlinews_upstream_selected_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m]))",
-          "instant": false,
+          "expr": "sum(irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m]))",
           "legendFormat": "",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Selections / sec",
-      "type": "stat",
-      "id": 2
+      "title": "Total upstream throughput",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "Rate of upstream failures (dial / health / IO).",
+      "description": "Current TUN throughput for selected instances.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
+          "decimals": 2,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.01
-              },
-              {
-                "color": "red",
-                "value": 0.1
               }
             ]
           },
-          "unit": "ops"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -139,6 +126,7 @@
         "x": 6,
         "y": 1
       },
+      "id": 3,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -160,26 +148,24 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(outlinews_upstream_failures_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m]))",
-          "instant": false,
+          "expr": "sum(irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m]))",
           "legendFormat": "",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Failures / sec",
-      "type": "stat",
-      "id": 3
+      "title": "Total TUN throughput",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "WebSocket bytes sent rate (outbound).",
+      "description": "Rate of SOCKS5 decisions (proxy mode). Uses upstream selection counter.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
+          "decimals": 2,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -189,7 +175,7 @@
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -199,6 +185,7 @@
         "x": 12,
         "y": 1
       },
+      "id": 4,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -220,36 +207,42 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(irate(outlinews_ws_bytes_total{dir=\"tx\",instance=~\"$instance\"}[1m]))",
-          "instant": false,
+          "expr": "sum(rate(outlinews_upstream_selected_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
           "legendFormat": "",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "WS TX bytes / sec",
-      "type": "stat",
-      "id": 4
+      "title": "SOCKS5 / selections",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "WebSocket bytes received rate (inbound).",
+      "description": "Average WS dial latency based on summary count/sum metrics.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
+          "decimals": 3,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 1
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -259,6 +252,7 @@
         "x": 18,
         "y": 1
       },
+      "id": 5,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -280,108 +274,14 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(irate(outlinews_ws_bytes_total{dir=\"rx\",instance=~\"$instance\"}[1m]))",
-          "instant": false,
+          "expr": "sum(rate(outlinews_ws_dial_duration_seconds_sum{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum(rate(outlinews_ws_dial_duration_seconds_count{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 0.0001)",
           "legendFormat": "",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "WS RX bytes / sec",
-      "type": "stat",
-      "id": 5
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "How often each upstream is selected (rate).",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 5
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (upstream, proto) (rate(outlinews_upstream_selected_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "{{upstream}} / {{proto}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Selections rate by upstream",
-      "type": "timeseries",
-      "id": 6
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "Failures by reason.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 5
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (upstream, proto, reason) (rate(outlinews_upstream_failures_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "{{upstream}} / {{proto}} / {{reason}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Failures rate by reason",
-      "type": "timeseries",
-      "id": 7
+      "title": "Average dial latency",
+      "type": "stat"
     },
     {
       "collapsed": false,
@@ -393,21 +293,111 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 5
       },
+      "id": 6,
       "panels": [],
-      "title": "Health",
-      "type": "row",
-      "id": 8
+      "title": "Upstream load (instance / upstream / proto)",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "Health of upstreams (1=healthy, 0=unhealthy).",
       "fieldConfig": {
         "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, upstream, proto) (irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m]))",
+          "legendFormat": "{{instance}} / {{upstream}} / {{proto}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Upstream throughput by instance/upstream/proto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, upstream, proto, reason) (rate(outlinews_upstream_failures_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
+          "legendFormat": "{{instance}} / {{upstream}} / {{proto}} / {{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Upstream failure rate by reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
           "mappings": [
             {
               "options": {
@@ -433,22 +423,20 @@
                 "value": 1
               }
             ]
-          },
-          "unit": "none",
-          "min": 0,
-          "max": 1
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 13
+        "y": 14
       },
+      "id": 9,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -463,147 +451,20 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "max by (upstream, proto) (outlinews_upstream_healthy{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"})",
-          "instant": false,
-          "legendFormat": "{{upstream}} / {{proto}}",
+          "expr": "max by (instance, upstream, proto) (outlinews_upstream_healthy{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"})",
+          "legendFormat": "{{instance}} / {{upstream}} / {{proto}}",
           "range": true,
           "refId": "A"
         }
       ],
       "title": "Upstream health",
-      "type": "timeseries",
-      "id": 9
-    },
-    {
-      "collapsed": false,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 21
-      },
-      "panels": [],
-      "title": "WebSocket I/O",
-      "type": "row",
-      "id": 10
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 22
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (dir) (rate(outlinews_ws_packets_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "{{dir}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "WS packets / sec",
-      "type": "timeseries",
-      "id": 11
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 22
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (dir) (irate(outlinews_ws_bytes_total{instance=~\"$instance\"}[1m]))",
-          "instant": false,
-          "legendFormat": "{{dir}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "WS bytes / sec",
-      "type": "timeseries",
-      "id": 12
-    },
-    {
-      "collapsed": false,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 29
-      },
-      "panels": [],
-      "title": "Latency",
-      "type": "row",
-      "id": 13
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "WebSocket dial duration quantiles (requires histogram bucket metric).",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -612,10 +473,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 30
+        "w": 12,
+        "x": 12,
+        "y": 14
       },
+      "id": 10,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -623,7 +485,8 @@
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -633,59 +496,14 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(outlinews_ws_dial_duration_seconds_bucket{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m])))",
-          "instant": false,
-          "legendFormat": "p50",
+          "expr": "sum by (instance, upstream, proto) (rate(outlinews_ws_dial_duration_seconds_sum{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum by (instance, upstream, proto) (rate(outlinews_ws_dial_duration_seconds_count{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 0.0001)",
+          "legendFormat": "{{instance}} / {{upstream}} / {{proto}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.90, sum by (le) (rate(outlinews_ws_dial_duration_seconds_bucket{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m])))",
-          "instant": false,
-          "legendFormat": "p90",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(outlinews_ws_dial_duration_seconds_bucket{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[5m])))",
-          "instant": false,
-          "legendFormat": "p99",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "WS dial duration (p50/p90/p99)",
-      "type": "timeseries",
-      "id": 14
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 38
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "### Prometheus scrape\n```yaml\n- job_name: outlinews\n  static_configs:\n    - targets: [\"HOST:9100\"]\n```\n\n### Expected metrics\n* `outlinews_upstream_selected_total{upstream,proto}`\n* `outlinews_upstream_failures_total{upstream,proto,reason}`\n* `outlinews_upstream_healthy{upstream,proto}`\n* `outlinews_ws_packets_total{dir}`\n* `outlinews_ws_bytes_total{dir}`\n* `outlinews_ws_dial_duration_seconds_bucket{upstream,proto,le}` (histogram)\n* `outlinews_upstream_bytes_total{upstream,proto,dir}`"
-      },
-      "title": "Setup",
-      "type": "text",
-      "id": 15
+      "title": "Dial latency by instance/upstream/proto",
+      "type": "timeseries"
     },
     {
       "collapsed": false,
@@ -697,114 +515,41 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 22
       },
+      "id": 11,
       "panels": [],
-      "title": "TUN",
-      "type": "row",
-      "id": 16
+      "title": "TUN load (instance / direction)",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "TUN packets processed rate (in+out).",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 45
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(outlinews_tun_packets_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "TUN packets / sec",
-      "type": "stat",
-      "id": 17
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "TUN bytes processed rate (in+out).",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
           "unit": "Bps"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 45
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 23
       },
+      "id": 12,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "textMode": "auto"
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -813,227 +558,42 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m]))",
-          "instant": false,
-          "legendFormat": "",
+          "expr": "sum by (instance, dir) (irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} / {{dir}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "TUN bytes / sec",
-      "type": "stat",
-      "id": 18
+      "title": "TUN throughput by instance/direction",
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "TUN packet drops rate (for example, unknown L3 frames).",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.01
-              },
-              {
-                "color": "red",
-                "value": 0.1
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 45
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(outlinews_tun_drops_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "TUN drops / sec",
-      "type": "stat",
-      "id": 19
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "TUN errors rate (read/write/send operations).",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.01
-              },
-              {
-                "color": "red",
-                "value": 0.1
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 45
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROM}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(outlinews_tun_errors_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "TUN errors / sec",
-      "type": "stat",
-      "id": 20
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROM}"
-      },
-      "description": "TUN packet rate split by direction.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
           "unit": "pps"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 49
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 23
       },
+      "id": 13,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -1043,91 +603,42 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (dir) (rate(outlinews_tun_packets_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "{{dir}}",
+          "expr": "sum by (instance, dir) (rate(outlinews_tun_packets_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{instance}} / {{dir}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "TUN packets / sec by direction",
-      "type": "timeseries",
-      "id": 21
+      "title": "TUN packet rate by instance/direction",
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "TUN error and drop rates split by reason/operation.",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
           "unit": "ops"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 49
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 23
       },
+      "id": 14,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -1137,9 +648,8 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (op) (rate(outlinews_tun_errors_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "error: {{op}}",
+          "expr": "sum by (instance, op) (rate(outlinews_tun_errors_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "error {{instance}} / {{op}}",
           "range": true,
           "refId": "A"
         },
@@ -1149,16 +659,14 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(outlinews_tun_drops_total{instance=~\"$instance\"}[5m]))",
-          "instant": false,
-          "legendFormat": "drop: {{reason}}",
+          "expr": "sum by (instance, reason) (rate(outlinews_tun_drops_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "drop {{instance}} / {{reason}}",
           "range": true,
           "refId": "B"
         }
       ],
-      "title": "TUN errors & drops / sec",
-      "type": "timeseries",
-      "id": 22
+      "title": "TUN drops/errors by instance",
+      "type": "timeseries"
     },
     {
       "collapsed": false,
@@ -1170,32 +678,21 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 31
       },
+      "id": 15,
       "panels": [],
-      "title": "Upstream traffic",
-      "type": "row",
-      "id": 23
+      "title": "SOCKS5 / proxy load (instance / upstream / proto)",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "Traffic rate split by upstream/protocol/direction for all uplinks.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "Bps"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -1203,18 +700,18 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 32
       },
+      "id": 16,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
           "mode": "multi",
-          "sort": "none"
+          "sort": "desc"
         }
       },
       "targets": [
@@ -1224,35 +721,23 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (upstream, proto, dir) (irate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[1m]))",
-          "legendFormat": "{{upstream}} / {{proto}} / {{dir}}",
+          "expr": "sum by (instance, upstream, proto) (rate(outlinews_upstream_selected_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
+          "legendFormat": "{{instance}} / {{upstream}} / {{proto}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Uplink traffic by upstream (bytes/s)",
-      "type": "timeseries",
-      "id": 24
+      "title": "Connection/route selections by instance/upstream/proto",
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROM}"
       },
-      "description": "Relative traffic share of each upstream+proto direction.",
       "fieldConfig": {
         "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percentunit"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -1260,18 +745,18 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 32
       },
+      "id": 17,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
           "mode": "multi",
-          "sort": "none"
+          "sort": "desc"
         }
       },
       "targets": [
@@ -1281,15 +766,33 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (upstream, proto, dir) (irate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[1m])) / clamp_min(sum(irate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\",instance=~\"$instance\"}[1m])), 1)",
-          "legendFormat": "{{upstream}} / {{proto}} / {{dir}}",
+          "expr": "sum by (instance, dir) (rate(outlinews_ws_packets_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{instance}} / {{dir}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Uplink traffic share",
-      "type": "timeseries",
-      "id": 25
+      "title": "WS packet load by instance",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 18,
+      "options": {
+        "content": "### Notes\n- This dashboard is optimized for **production operations** with filters for `instance`, `upstream`, and `proto`.\n- **Upstream/TUN/SOCKS5** views are separated by rows so on-call can quickly isolate bottlenecks.\n- SOCKS5 load is represented by upstream selection + WS traffic metrics (proxy path).\n- Dial latency uses `outlinews_ws_dial_duration_seconds_sum/count` (summary average), which matches exported metrics.",
+        "mode": "markdown"
+      },
+      "title": "Runbook notes",
+      "type": "text"
     }
   ],
   "refresh": "10s",
@@ -1297,6 +800,7 @@
   "style": "dark",
   "tags": [
     "outlinews",
+    "production",
     "prometheus"
   ],
   "templating": {
@@ -1364,7 +868,7 @@
         "options": [],
         "query": {
           "query": "label_values(outlinews_upstream_selected_total, upstream)",
-          "refId": "PromVariableQueryEditor-1"
+          "refId": "PromVariableQueryEditor-upstream"
         },
         "refresh": 2,
         "regex": "",
@@ -1391,7 +895,7 @@
         "options": [],
         "query": {
           "query": "label_values(outlinews_upstream_selected_total, proto)",
-          "refId": "PromVariableQueryEditor-2"
+          "refId": "PromVariableQueryEditor-proto"
         },
         "refresh": 2,
         "regex": "",
@@ -1428,8 +932,8 @@
     ]
   },
   "timezone": "",
-  "title": "Outline WS CLI — Monitoring",
+  "title": "Outline WS CLI — Production Load",
   "uid": "outlinews-monitoring",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }
