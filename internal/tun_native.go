@@ -257,6 +257,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 
 		n, err := ifce.Read(buf)
 		if err != nil {
+			observeTunError("read")
 			tunDebugf(debug, "read from tun failed: %v", err)
 			return err
 		}
@@ -269,9 +270,11 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		case 6:
 			proto = ipv6.ProtocolNumber
 		default:
+			observeTunDrop("unknown_l3")
 			tunDebugf(debug, "drop packet with unknown L3 version (len=%d)", len(pkt))
 			continue
 		}
+		observeTunFrame("in", len(pkt))
 
 		pb := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Payload: buffer.MakeWithData(append([]byte(nil), pkt...)),
@@ -299,9 +302,11 @@ func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		pb.DecRef()
 
 		if _, err := ifce.Write(b); err != nil {
+			observeTunError("write")
 			tunDebugf(debug, "write to tun failed: %v", err)
 			return err
 		}
+		observeTunFrame("out", len(b))
 	}
 }
 
@@ -440,6 +445,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		}
 
 		if err := ps.sess.Send(dst, buf[:n]); err != nil {
+			observeTunError("udp_send")
 			tunDebugf(true, "udp send to outline failed dst=%s len=%d upstream=%s: %v", dst, n, ps.up.cfg.Name, err)
 			lb.ReportUDPFailure(ps.up, err)
 			break
