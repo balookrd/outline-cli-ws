@@ -2,7 +2,10 @@ package internal
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +54,38 @@ func TestToPromLabels(t *testing.T) {
 	want := "upstream=\"edge-1\",proto=\"tcp\",reason=\"timeout\""
 	if got != want {
 		t.Fatalf("toPromLabels=%q want %q", got, want)
+	}
+}
+
+func TestTunMetricsExposed(t *testing.T) {
+	metricsMu.Lock()
+	metrics = telemetry{}
+	metricsMu.Unlock()
+
+	EnablePrometheusMetrics()
+	observeTunFrame("in", 128)
+	observeTunFrame("out", 256)
+	observeTunDrop("unknown_l3")
+	observeTunError("read")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	metricsHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metricsHandler status=%d want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"outlinews_tun_packets_total{dir=\"in\"} 1",
+		"outlinews_tun_packets_total{dir=\"out\"} 1",
+		"outlinews_tun_bytes_total{dir=\"in\"} 128",
+		"outlinews_tun_bytes_total{dir=\"out\"} 256",
+		"outlinews_tun_drops_total{reason=\"unknown_l3\"} 1",
+		"outlinews_tun_errors_total{op=\"read\"} 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics output missing %q\nbody:\n%s", want, body)
+		}
 	}
 }
