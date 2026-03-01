@@ -25,6 +25,11 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
+const (
+	rawH2MaxDataFrameChunk = 16 * 1024
+	rawH2WindowUpdateBatch = 64 * 1024
+)
+
 var rfc8441Debug = os.Getenv("OUTLINE_WS_DEBUG") != ""
 
 func rfcdbg(prefix, format string, args ...any) {
@@ -462,21 +467,23 @@ func (s *rawH2Stream) Read(p []byte) (int, error) { return s.r.Read(p) }
 
 func (s *rawH2Stream) Write(p []byte) (int, error) {
 	// Send DATA on stream 1.
-	max := 16 * 1024
+	s.parent.wmu.Lock()
+	defer s.parent.wmu.Unlock()
+
 	off := 0
 	for off < len(p) {
-		end := off + max
+		end := off + rawH2MaxDataFrameChunk
 		if end > len(p) {
 			end = len(p)
 		}
 		chunk := p[off:end]
-		err := s.parent.writeFrame(func() error {
-			return s.parent.fr.WriteData(1, false, chunk)
-		})
-		if err != nil {
+		if err := s.parent.fr.WriteData(1, false, chunk); err != nil {
 			return off, err
 		}
 		off = end
+	}
+	if err := s.parent.bw.Flush(); err != nil {
+		return off, err
 	}
 	return len(p), nil
 }
@@ -490,6 +497,23 @@ func (s *rawH2Stream) Close() error {
 
 func (s *rawH2Stream) readLoop(ctx context.Context) {
 	defer s.w.Close()
+	var pendingWindowUpdate uint32
+	flushWindowUpdate := func(force bool) {
+		if pendingWindowUpdate == 0 {
+			return
+		}
+		if !force && pendingWindowUpdate < rawH2WindowUpdateBatch {
+			return
+		}
+		v := pendingWindowUpdate
+		pendingWindowUpdate = 0
+		_ = s.parent.writeFrame(func() error {
+			_ = s.parent.fr.WriteWindowUpdate(0, v)
+			return s.parent.fr.WriteWindowUpdate(1, v)
+		})
+	}
+	defer flushWindowUpdate(true)
+
 	for {
 		select {
 		case <-s.parent.closed:
@@ -512,13 +536,11 @@ func (s *rawH2Stream) readLoop(ctx context.Context) {
 			data := ff.Data()
 			if len(data) > 0 {
 				_, _ = s.w.Write(data)
-				// Replenish flow control.
-				_ = s.parent.writeFrame(func() error {
-					_ = s.parent.fr.WriteWindowUpdate(0, uint32(len(data)))
-					return s.parent.fr.WriteWindowUpdate(1, uint32(len(data)))
-				})
+				pendingWindowUpdate += uint32(len(data))
+				flushWindowUpdate(false)
 			}
 			if ff.StreamEnded() {
+				flushWindowUpdate(true)
 				return
 			}
 		case *http2.RSTStreamFrame:
