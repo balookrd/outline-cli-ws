@@ -27,6 +27,8 @@ type TunConfig struct {
 	Enable bool   `yaml:"enable"`
 	Device string `yaml:"device"`
 	MTU    int    `yaml:"mtu"`
+	NetNS  string `yaml:"netns"` // optional path to target network namespace (Linux), e.g. /var/run/netns/vpn
+	Debug  bool   `yaml:"debug"` // extra TUN diagnostics (flow-level logs, useful for netns/routing troubleshooting)
 	// Native UDP flow table tuning
 	UDPMaxFlows        int           `yaml:"udp_max_flows"`         // e.g. 4096
 	UDPIdleTimeout     time.Duration `yaml:"udp_idle_timeout"`      // e.g. 60s

@@ -1,4 +1,4 @@
-//go:build !unit
+//go:build !unit && linux
 
 package internal
 
@@ -9,7 +9,11 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"runtime"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/songgao/water"
 
@@ -28,7 +32,7 @@ import (
 
 // ----- TUN open (existing interface created by script) -----
 
-func openExistingTun(name string) (*water.Interface, int, error) {
+func openExistingTun(name string, debug bool) (*water.Interface, int, error) {
 	if name == "" {
 		return nil, 0, fmt.Errorf("tun.device is empty")
 	}
@@ -43,6 +47,11 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 		return nil, 0, fmt.Errorf("open tun %q: %w", name, err)
 	}
 
+	if err := ensureTunPersistent(ifce, name, debug); err != nil {
+		_ = ifce.Close()
+		return nil, 0, err
+	}
+
 	ifi, err := net.InterfaceByName(name)
 	if err != nil {
 		_ = ifce.Close()
@@ -53,6 +62,67 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 		mtu = 1500
 	}
 	return ifce, mtu, nil
+}
+
+func ensureTunPersistent(ifce *water.Interface, name string, debug bool) error {
+	f, ok := ifce.ReadWriteCloser.(*os.File)
+	if !ok {
+		return fmt.Errorf("tun %q: unexpected handle type %T", name, ifce.ReadWriteCloser)
+	}
+
+	if err := unix.IoctlSetInt(int(f.Fd()), unix.TUNSETPERSIST, 1); err != nil {
+		if err == unix.EPERM {
+			tunDebugf(debug, "failed to set TUNSETPERSIST for %q (continuing): %v", name, err)
+			return nil
+		}
+		return fmt.Errorf("set TUNSETPERSIST for %q: %w", name, err)
+	}
+
+	tunDebugf(debug, "TUN interface %q marked persistent", name)
+	return nil
+}
+
+func withNetNS(path string, fn func() error) error {
+	if path == "" {
+		return fn()
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	orig, err := os.Open("/proc/self/ns/net")
+	if err != nil {
+		return fmt.Errorf("open current netns: %w", err)
+	}
+	defer orig.Close()
+
+	target, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open tun.netns %q: %w", path, err)
+	}
+	defer target.Close()
+
+	if err := unix.Setns(int(target.Fd()), unix.CLONE_NEWNET); err != nil {
+		return fmt.Errorf("setns(%q): %w", path, err)
+	}
+	defer func() {
+		if err := unix.Setns(int(orig.Fd()), unix.CLONE_NEWNET); err != nil {
+			log.Printf("WARN: failed to restore original netns: %v", err)
+		}
+	}()
+
+	return fn()
+}
+
+func tunDebugf(enabled bool, format string, args ...any) {
+	if enabled {
+		log.Printf("tun debug: "+format, args...)
+	}
+}
+
+func isDNSDestination(dst string) bool {
+	_, port, err := net.SplitHostPort(dst)
+	return err == nil && port == "53"
 }
 
 // ----- Main -----
@@ -77,8 +147,22 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	}
 
 	log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Device)
+	if cfg.NetNS != "" {
+		log.Printf("TUN netns enabled: opening %q inside %q", cfg.Device, cfg.NetNS)
+	}
+	if cfg.Debug {
+		log.Printf("TUN debug logging is enabled")
+	}
 
-	ifce, mtu, err := openExistingTun(cfg.Device)
+	var (
+		ifce *water.Interface
+		mtu  int
+	)
+	err := withNetNS(cfg.NetNS, func() error {
+		var openErr error
+		ifce, mtu, openErr = openExistingTun(cfg.Device, cfg.Debug)
+		return openErr
+	})
 	if err != nil {
 		return err
 	}
@@ -135,7 +219,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		}
 		r.Complete(false)
 
-		go tunHandleTCP(ctx, lb, epTCP, id, &wq)
+		go tunHandleTCP(ctx, lb, epTCP, id, &wq, cfg.Debug)
 	})
 	st.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
@@ -148,14 +232,14 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 		if err != nil {
 			return
 		}
-		go tunHandleUDP(ctx, lb, portTable, epUDP, id, &wq)
+		go tunHandleUDP(ctx, lb, portTable, epUDP, id, &wq, cfg.Debug)
 	})
 	st.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 
 	// Pumps
 	errCh := make(chan error, 2)
-	go func() { errCh <- tunToStack(ctx, ifce, ep) }()
-	go func() { errCh <- stackToTun(ctx, ifce, ep) }()
+	go func() { errCh <- tunToStack(ctx, ifce, ep, cfg.Debug) }()
+	go func() { errCh <- stackToTun(ctx, ifce, ep, cfg.Debug) }()
 
 	select {
 	case <-ctx.Done():
@@ -165,7 +249,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	}
 }
 
-func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint) error {
+func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint, debug bool) error {
 	buf := make([]byte, 65535)
 	for {
 		select {
@@ -176,6 +260,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 
 		n, err := ifce.Read(buf)
 		if err != nil {
+			tunDebugf(debug, "read from tun failed: %v", err)
 			return err
 		}
 		pkt := buf[:n]
@@ -187,6 +272,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		case 6:
 			proto = ipv6.ProtocolNumber
 		default:
+			tunDebugf(debug, "drop packet with unknown L3 version (len=%d)", len(pkt))
 			continue
 		}
 
@@ -198,7 +284,7 @@ func tunToStack(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 	}
 }
 
-func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint) error {
+func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint, debug bool) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,25 +302,31 @@ func stackToTun(ctx context.Context, ifce *water.Interface, ep *channel.Endpoint
 		pb.DecRef()
 
 		if _, err := ifce.Write(b); err != nil {
+			tunDebugf(debug, "write to tun failed: %v", err)
 			return err
 		}
 	}
 }
 
-func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
+func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue, debug bool) {
 	defer epTCP.Close()
 
 	nsConn := gonet.NewTCPConn(wq, epTCP)
 	defer nsConn.Close()
 
-	dst := net.JoinHostPort(net.IP(id.RemoteAddress.AsSlice()).String(), fmt.Sprintf("%d", id.RemotePort))
+	// gVisor forwarder IDs are oriented as local=packet destination, remote=packet source.
+	// For outbound packets from namespace workload: remote=workload, local=real destination.
+	dst := net.JoinHostPort(net.IP(id.LocalAddress.AsSlice()).String(), fmt.Sprintf("%d", id.LocalPort))
+	tunDebugf(debug, "tcp flow: %s:%d -> %s", net.IP(id.RemoteAddress.AsSlice()).String(), id.RemotePort, dst)
 
 	up, err := lb.PickTCP()
 	if err != nil {
+		tunDebugf(debug, "PickTCP failed for dst=%s: %v", dst, err)
 		return
 	}
 	out, err := DialOutlineTCP(ctx, lb, up, dst)
 	if err != nil {
+		tunDebugf(debug, "DialOutlineTCP failed dst=%s via upstream=%s: %v", dst, up.cfg.Name, err)
 		lb.ReportTCPFailure(up, err)
 		return
 	}
@@ -249,30 +341,33 @@ func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, i
 	_, _ = io.Copy(nsConn, out)
 }
 
-func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue) {
+func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP tcpip.Endpoint, id stack.TransportEndpointID, wq *waiter.Queue, debug bool) {
 	defer epUDP.Close()
 
 	nsUDP := gonet.NewUDPConn(wq, epUDP)
 	defer nsUDP.Close()
 
 	var srcIP netip.Addr
-	if id.LocalAddress.Len() == 4 {
-		srcIP = netip.AddrFrom4([4]byte(id.LocalAddress.AsSlice()))
+	if id.RemoteAddress.Len() == 4 {
+		srcIP = netip.AddrFrom4([4]byte(id.RemoteAddress.AsSlice()))
 	} else {
-		srcIP = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
+		srcIP = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
 	}
 	var dstAddr netip.Addr
-	if id.RemoteAddress.Len() == 4 {
-		dstAddr = netip.AddrFrom4([4]byte(id.RemoteAddress.AsSlice()))
+	if id.LocalAddress.Len() == 4 {
+		dstAddr = netip.AddrFrom4([4]byte(id.LocalAddress.AsSlice()))
 	} else {
-		dstAddr = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
+		dstAddr = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
 	}
-	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.RemotePort))
+	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.LocalPort))
+	if cfgDNS := isDNSDestination(dst); cfgDNS || debug {
+		tunDebugf(true, "udp flow: %s:%d -> %s", srcIP.String(), id.RemotePort, dst)
+	}
 
 	pk := udpPortKey{
 		netProto: 4,
 		srcIP:    srcIP,
-		srcPort:  id.LocalPort,
+		srcPort:  id.RemotePort,
 	}
 	if srcIP.Is6() {
 		pk.netProto = 6
@@ -280,6 +375,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 
 	ps, err := pt.getOrCreate(ctx, pk)
 	if err != nil {
+		tunDebugf(true, "udp session create failed for %s:%d -> %s: %v", srcIP.String(), id.LocalPort, dst, err)
 		return
 	}
 
@@ -292,6 +388,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 			maxDst = 512
 		}
 		if len(ps.flows) >= maxDst {
+			tunDebugf(debug, "udp drop flow %s: max dst per port reached (%d)", dst, maxDst)
 			ps.mu.Unlock()
 			return
 		}
@@ -307,9 +404,14 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 					return
 				case p, ok := <-replyCh:
 					if !ok {
+						tunDebugf(debug, "udp reply channel closed for dst=%s", dst)
 						return
 					}
-					_, _ = nsUDP.Write(p.B)
+					if _, err := nsUDP.Write(p.B); err != nil {
+						tunDebugf(true, "udp write back to stack failed dst=%s: %v", dst, err)
+						p.Release()
+						return
+					}
 					p.Release()
 
 					now := time.Now()
@@ -333,6 +435,7 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	for {
 		n, _, err := nsUDP.ReadFrom(buf)
 		if err != nil {
+			tunDebugf(debug, "udp read from stack failed dst=%s: %v", dst, err)
 			break
 		}
 		if n == 0 {
@@ -340,8 +443,12 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 		}
 
 		if err := ps.sess.Send(dst, buf[:n]); err != nil {
+			tunDebugf(true, "udp send to outline failed dst=%s len=%d upstream=%s: %v", dst, n, ps.up.cfg.Name, err)
 			lb.ReportUDPFailure(ps.up, err)
 			break
+		}
+		if isDNSDestination(dst) && (debug || n > 0) {
+			tunDebugf(true, "udp dns query forwarded dst=%s len=%d", dst, n)
 		}
 
 		now := time.Now()
@@ -361,4 +468,5 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	delete(ps.flows, dst)
 	ps.mu.Unlock()
 	ps.sess.Unsubscribe(dst)
+	tunDebugf(debug, "udp flow closed: %s", dst)
 }
