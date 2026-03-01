@@ -9,7 +9,11 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"runtime"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/songgao/water"
 
@@ -55,6 +59,41 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 	return ifce, mtu, nil
 }
 
+func withNetNS(path string, fn func() error) error {
+	if path == "" {
+		return fn()
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("tun.netns is supported only on linux")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	orig, err := os.Open("/proc/self/ns/net")
+	if err != nil {
+		return fmt.Errorf("open current netns: %w", err)
+	}
+	defer orig.Close()
+
+	target, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open tun.netns %q: %w", path, err)
+	}
+	defer target.Close()
+
+	if err := unix.Setns(int(target.Fd()), unix.CLONE_NEWNET); err != nil {
+		return fmt.Errorf("setns(%q): %w", path, err)
+	}
+	defer func() {
+		if err := unix.Setns(int(orig.Fd()), unix.CLONE_NEWNET); err != nil {
+			log.Printf("WARN: failed to restore original netns: %v", err)
+		}
+	}()
+
+	return fn()
+}
+
 // ----- Main -----
 
 func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
@@ -77,8 +116,19 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	}
 
 	log.Printf("TUN mode enabled (native), expecting existing interface %q", cfg.Device)
+	if cfg.NetNS != "" {
+		log.Printf("TUN netns enabled: opening %q inside %q", cfg.Device, cfg.NetNS)
+	}
 
-	ifce, mtu, err := openExistingTun(cfg.Device)
+	var (
+		ifce *water.Interface
+		mtu  int
+	)
+	err := withNetNS(cfg.NetNS, func() error {
+		var openErr error
+		ifce, mtu, openErr = openExistingTun(cfg.Device)
+		return openErr
+	})
 	if err != nil {
 		return err
 	}

@@ -395,6 +395,7 @@ tun:
   enable: true
   device: "tun0"
   mtu: 1500
+  netns: "" # optional Linux netns path, e.g. /var/run/netns/tun
 ```
 
 ## What each field means
@@ -402,6 +403,7 @@ tun:
 * `tun.enable` — turns TUN mode on/off.
 * `tun.device` — interface name to open (must already exist before startup).
 * `tun.mtu` — link MTU (defaults to interface MTU or 1500 if unavailable).
+* `tun.netns` — optional Linux network namespace path where the TUN device exists (for example `/var/run/netns/tun`).
 
 Additional optional tuning keys (if present in your config schema/build):
 
@@ -412,15 +414,17 @@ Additional optional tuning keys (if present in your config schema/build):
 ## Typical Linux setup flow
 
 1. Create and bring up the TUN interface (for example, `tun0`).
-2. Assign IPv4/IPv6 addresses to that interface.
-3. Add route rules so selected/default traffic goes via `tun0`.
-4. Start `outline-cli-ws` with `tun.enable: true` and matching `tun.device`.
-5. Verify no routing loops (use `fwmark` policy routing when needed).
+2. (Optional) if the TUN device lives in a separate netns, set `tun.netns` to that namespace path.
+3. Assign IPv4/IPv6 addresses to that interface.
+4. Add route rules so selected/default traffic goes via `tun0`.
+5. Start `outline-cli-ws` with `tun.enable: true` and matching `tun.device`.
+6. Verify no routing loops (use `fwmark` policy routing when needed).
 
 ## Operational notes
 
 * TUN mode requires elevated networking privileges (`root` or `CAP_NET_ADMIN`).
 * `fwmark` helps prevent routing loops when tunneled traffic could otherwise re-enter the same default route.
+* With `tun.netns`, the app temporarily enters that namespace only to open the TUN device, then returns to the original namespace for upstream/probe sockets (global routing table).
 * Health checks, balancing, and failover logic remain active in TUN mode.
 * For app-by-app routing, SOCKS5 mode may be simpler than full-system TUN routing.
 
