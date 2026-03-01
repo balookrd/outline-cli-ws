@@ -291,8 +291,10 @@ func tunHandleTCP(ctx context.Context, lb *LoadBalancer, epTCP tcpip.Endpoint, i
 	nsConn := gonet.NewTCPConn(wq, epTCP)
 	defer nsConn.Close()
 
-	dst := net.JoinHostPort(net.IP(id.RemoteAddress.AsSlice()).String(), fmt.Sprintf("%d", id.RemotePort))
-	tunDebugf(debug, "tcp flow: %s:%d -> %s", net.IP(id.LocalAddress.AsSlice()).String(), id.LocalPort, dst)
+	// gVisor forwarder IDs are oriented as local=packet destination, remote=packet source.
+	// For outbound packets from namespace workload: remote=workload, local=real destination.
+	dst := net.JoinHostPort(net.IP(id.LocalAddress.AsSlice()).String(), fmt.Sprintf("%d", id.LocalPort))
+	tunDebugf(debug, "tcp flow: %s:%d -> %s", net.IP(id.RemoteAddress.AsSlice()).String(), id.RemotePort, dst)
 
 	up, err := lb.PickTCP()
 	if err != nil {
@@ -323,26 +325,26 @@ func tunHandleUDP(ctx context.Context, lb *LoadBalancer, pt *udpPortTable, epUDP
 	defer nsUDP.Close()
 
 	var srcIP netip.Addr
-	if id.LocalAddress.Len() == 4 {
-		srcIP = netip.AddrFrom4([4]byte(id.LocalAddress.AsSlice()))
+	if id.RemoteAddress.Len() == 4 {
+		srcIP = netip.AddrFrom4([4]byte(id.RemoteAddress.AsSlice()))
 	} else {
-		srcIP = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
+		srcIP = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
 	}
 	var dstAddr netip.Addr
-	if id.RemoteAddress.Len() == 4 {
-		dstAddr = netip.AddrFrom4([4]byte(id.RemoteAddress.AsSlice()))
+	if id.LocalAddress.Len() == 4 {
+		dstAddr = netip.AddrFrom4([4]byte(id.LocalAddress.AsSlice()))
 	} else {
-		dstAddr = netip.AddrFrom16([16]byte(id.RemoteAddress.AsSlice()))
+		dstAddr = netip.AddrFrom16([16]byte(id.LocalAddress.AsSlice()))
 	}
-	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.RemotePort))
+	dst := net.JoinHostPort(dstAddr.String(), fmt.Sprintf("%d", id.LocalPort))
 	if cfgDNS := isDNSDestination(dst); cfgDNS || debug {
-		tunDebugf(true, "udp flow: %s:%d -> %s", srcIP.String(), id.LocalPort, dst)
+		tunDebugf(true, "udp flow: %s:%d -> %s", srcIP.String(), id.RemotePort, dst)
 	}
 
 	pk := udpPortKey{
 		netProto: 4,
 		srcIP:    srcIP,
-		srcPort:  id.LocalPort,
+		srcPort:  id.RemotePort,
 	}
 	if srcIP.Is6() {
 		pk.netProto = 6
