@@ -81,7 +81,7 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, dnsServer string,
 	defer wsc.Close(WSStatusNormalClosure, "udp-probe")
 
 	// Underlying WS packet transport
-	wsPC := NewWSPacketConn(ctx, wsc)
+	wsPC := NewWSPacketConn(ctx, wsc, up.Name, "udp")
 	encPC := ciph.PacketConn(wsPC)
 	defer encPC.Close()
 

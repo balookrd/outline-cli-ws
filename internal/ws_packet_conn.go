@@ -14,12 +14,14 @@ import (
 //
 // Note: ReadFrom will skip non-binary WS messages.
 type WSPacketConn struct {
-	ctx context.Context
-	c   WSConn
+	ctx      context.Context
+	c        WSConn
+	upstream string
+	proto    string
 }
 
-func NewWSPacketConn(ctx context.Context, c WSConn) *WSPacketConn {
-	return &WSPacketConn{ctx: ctx, c: c}
+func NewWSPacketConn(ctx context.Context, c WSConn, upstream, proto string) *WSPacketConn {
+	return &WSPacketConn{ctx: ctx, c: c, upstream: upstream, proto: proto}
 }
 
 func (w *WSPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -33,6 +35,7 @@ func (w *WSPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		n := copy(p, data)
 		observeWSFrame("in", n)
+		observeUpstreamTraffic(w.upstream, w.proto, "in", n)
 		return n, dummyAddr{}, nil
 	}
 }
@@ -42,6 +45,7 @@ func (w *WSPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 		return 0, err
 	}
 	observeWSFrame("out", len(p))
+	observeUpstreamTraffic(w.upstream, w.proto, "out", len(p))
 	return len(p), nil
 }
 

@@ -681,7 +681,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Prometheus scrape\n```yaml\n- job_name: outlinews\n  static_configs:\n    - targets: [\"HOST:9100\"]\n```\n\n### Expected metrics\n* `outlinews_upstream_selected_total{upstream,proto}`\n* `outlinews_upstream_failures_total{upstream,proto,reason}`\n* `outlinews_upstream_healthy{upstream,proto}`\n* `outlinews_ws_packets_total{dir}`\n* `outlinews_ws_bytes_total{dir}`\n* `outlinews_ws_dial_duration_seconds_bucket{upstream,proto,le}` (histogram)"
+        "content": "### Prometheus scrape\n```yaml\n- job_name: outlinews\n  static_configs:\n    - targets: [\"HOST:9100\"]\n```\n\n### Expected metrics\n* `outlinews_upstream_selected_total{upstream,proto}`\n* `outlinews_upstream_failures_total{upstream,proto,reason}`\n* `outlinews_upstream_healthy{upstream,proto}`\n* `outlinews_ws_packets_total{dir}`\n* `outlinews_ws_bytes_total{dir}`\n* `outlinews_ws_dial_duration_seconds_bucket{upstream,proto,le}` (histogram)\n* `outlinews_upstream_bytes_total{upstream,proto,dir}`"
       },
       "title": "Setup",
       "type": "text",
@@ -1159,6 +1159,137 @@
       "title": "TUN errors & drops / sec",
       "type": "timeseries",
       "id": 22
+    },
+    {
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "panels": [],
+      "title": "Upstream traffic",
+      "type": "row",
+      "id": 23
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Traffic rate split by upstream/protocol/direction for all uplinks.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (upstream, proto, dir) (rate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
+          "legendFormat": "{{upstream}} / {{proto}} / {{dir}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Uplink traffic by upstream (bytes/s)",
+      "type": "timeseries",
+      "id": 24
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Relative traffic share of each upstream+proto direction.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (upstream, proto, dir) (rate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum(rate(outlinews_upstream_bytes_total{upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1)",
+          "legendFormat": "{{upstream}} / {{proto}} / {{dir}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Uplink traffic share",
+      "type": "timeseries",
+      "id": 25
     }
   ],
   "refresh": "10s",

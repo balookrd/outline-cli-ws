@@ -22,6 +22,7 @@ type telemetry struct {
 	wsBytes       map[string]uint64
 	wsDialSum     map[string]float64
 	wsDialCount   map[string]uint64
+	upstreamBytes map[string]uint64
 	tunPackets    map[string]uint64
 	tunBytes      map[string]uint64
 	tunDrops      map[string]uint64
@@ -46,6 +47,7 @@ func EnablePrometheusMetrics() {
 	metrics.wsBytes = make(map[string]uint64)
 	metrics.wsDialSum = make(map[string]float64)
 	metrics.wsDialCount = make(map[string]uint64)
+	metrics.upstreamBytes = make(map[string]uint64)
 	metrics.tunPackets = make(map[string]uint64)
 	metrics.tunBytes = make(map[string]uint64)
 	metrics.tunDrops = make(map[string]uint64)
@@ -141,6 +143,19 @@ func observeDial(upstream, proto string, d time.Duration) {
 	metrics.wsDialSum[k] += d.Seconds()
 }
 
+func observeUpstreamTraffic(upstream, proto, direction string, bytes int) {
+	metricsMu.RLock()
+	if !metrics.enabled {
+		metricsMu.RUnlock()
+		return
+	}
+	metrics.mu.Lock()
+	metricsMu.RUnlock()
+	defer metrics.mu.Unlock()
+	k := fmt.Sprintf("upstream=%s,proto=%s,dir=%s", upstream, proto, direction)
+	metrics.upstreamBytes[k] += uint64(bytes)
+}
+
 func observeTunFrame(direction string, bytes int) {
 	metricsMu.RLock()
 	if !metrics.enabled {
@@ -218,6 +233,7 @@ func metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	writeCounterVec(w, "outlinews_ws_packets_total", metrics.wsPackets)
 	writeCounterVec(w, "outlinews_ws_bytes_total", metrics.wsBytes)
 	writeSummaryAsCountAndSum(w, "outlinews_ws_dial_duration_seconds", metrics.wsDialCount, metrics.wsDialSum)
+	writeCounterVec(w, "outlinews_upstream_bytes_total", metrics.upstreamBytes)
 	writeCounterVec(w, "outlinews_tun_packets_total", metrics.tunPackets)
 	writeCounterVec(w, "outlinews_tun_bytes_total", metrics.tunBytes)
 	writeCounterVec(w, "outlinews_tun_drops_total", metrics.tunDrops)
