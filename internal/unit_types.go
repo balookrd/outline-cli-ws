@@ -8,7 +8,7 @@ import "time"
 
 type UpstreamConfig struct {
 	Name   string
-	Weight int
+	Weight float64
 
 	TCPWSS string
 	UDPWSS string
@@ -47,7 +47,6 @@ type ProbeConfig struct {
 }
 
 type TunConfig struct {
-	Enable bool
 	Device string
 
 	UDPMaxFlows        int

@@ -128,9 +128,6 @@ func isDNSDestination(dst string) bool {
 // ----- Main -----
 
 func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
-	if !cfg.Enable {
-		return nil
-	}
 	if cfg.Device == "" {
 		return fmt.Errorf("tun.device is empty")
 	}
