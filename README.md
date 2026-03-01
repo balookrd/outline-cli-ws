@@ -1,8 +1,8 @@
 # Outline WS Load-Balancing Client
 
-High-performance **Outline (Shadowsocks) client over WebSocket**
-with intelligent load balancing, active health probing, IPv6, fwmark policy routing, optional full-system TUN mode and
-native **WebSocket over HTTP/2 (RFC 8441 Extended CONNECT)** support.
+High-performance **Outline (Shadowsocks) client over WebSocket** with SOCKS5 and optional
+full-system TUN mode. The client supports load balancing, active health probing, IPv4/IPv6,
+fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, HTTP/2 (RFC 8441), and HTTP/3 (RFC 9220)**.
 
 ---
 
@@ -53,28 +53,27 @@ native **WebSocket over HTTP/2 (RFC 8441 Extended CONNECT)** support.
 # Architecture
 
 ```
-Applications
-│
-▼
-SOCKS5 (127.0.0.1:1080)
-│
-▼
-Load Balancer
-├── TCP Health (adaptive)
-├── UDP Health (adaptive)
-├── Active Quality Probe
-├── Fastest-first + Sticky
-├── Runtime Failover
-└── Warm-standby
-│
-▼
-Shadowsocks AEAD
-│
-▼
-WebSocket (RFC8441 / HTTP2 or classic)
-│
-▼
-Outline Servers
+Applications / System traffic
+├── SOCKS5 (127.0.0.1:1080, optional)
+└── TUN interface (tun.device, optional)
+            │
+            ▼
+      Load Balancer
+      ├── TCP Health (adaptive)
+      ├── UDP Health (adaptive)
+      ├── Active Quality Probe
+      ├── Fastest-first + Sticky
+      ├── Runtime Failover
+      └── Warm-standby
+            │
+            ▼
+      Shadowsocks AEAD
+            │
+            ▼
+      WebSocket (h1 / RFC 8441 h2 / RFC 9220 h3)
+            │
+            ▼
+      Outline Servers
 ```
 
 ---
@@ -533,7 +532,7 @@ Instant failover without cold handshake.
 * Linux required for fwmark and TUN
 * Root or CAP_NET_ADMIN needed for TUN
 * No GUI
-* No HTTP/3 (yet)
+* HTTP/3 depends on upstream support and can be forced with `h3=only` for validation
 
 ---
 
@@ -564,10 +563,14 @@ Then scrape `http://localhost:9100/metrics`.
 
 ## Grafana dashboard
 
-Ready-to-import dashboard JSON is available in:
+Provisioned dashboard JSON is available in:
 
-* `examples/outlinews_grafana_dashboard_plain.json`
-* `examples/outlinews_grafana_dashboard_api.json`
+* `deploy/grafana/dashboards/outlinews.json`
+
+Grafana provisioning and datasource config:
+
+* `deploy/grafana/provisioning/dashboards/dashboards.yml`
+* `deploy/grafana/provisioning/datasources/prometheus.yml`
 
 Or run the full monitoring stack via Docker Compose (OutlineWS + Prometheus + Grafana):
 
@@ -575,4 +578,4 @@ Or run the full monitoring stack via Docker Compose (OutlineWS + Prometheus + Gr
 docker compose up --build
 ```
 
-Provisioned files are in `deploy/prometheus` and `deploy/grafana`.
+Prometheus scrape config is in `deploy/prometheus/prometheus.yml`.
