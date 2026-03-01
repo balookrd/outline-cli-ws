@@ -1,4 +1,4 @@
-//go:build !unit
+//go:build !unit && linux
 
 package internal
 
@@ -62,9 +62,6 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 func withNetNS(path string, fn func() error) error {
 	if path == "" {
 		return fn()
-	}
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("tun.netns is supported only on linux")
 	}
 
 	runtime.LockOSThread()
