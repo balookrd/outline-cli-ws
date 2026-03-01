@@ -79,9 +79,24 @@ Outline Servers
 
 ---
 
-# WebSocket Transport Modes
+# WebSocket Transport Modes (h1/h2/h3)
 
-## 1️⃣ Classic WebSocket (HTTP/1.1 Upgrade)
+The client supports three upstream WebSocket transport families:
+
+* **h1** — classic WebSocket over HTTP/1.1 Upgrade
+* **h2** — WebSocket over HTTP/2 Extended CONNECT (RFC 8441)
+* **h3** — WebSocket over HTTP/3 Extended CONNECT (RFC 9220)
+
+Mode is selected by URL query flags on `tcp_wss` / `udp_wss`:
+
+* `?h2=only` → strict **h2** mode (no fallback)
+* `?h3=1` / `?http3=1` / `?quic=1` → try **h3**, then fallback
+* `?h3=only` / `?http3=only` → strict **h3** mode (no fallback)
+* no mode flags → default **h1** path (with automatic upgrades when explicitly requested)
+
+---
+
+## 1️⃣ h1: Classic WebSocket (HTTP/1.1 Upgrade)
 
 Standard WSS handshake.
 
@@ -89,10 +104,11 @@ Used if:
 
 * server does not support RFC 8441
 * `h2` mode is not requested
+* `h3` mode is not requested
 
 ---
 
-## 2️⃣ WebSocket over HTTP/2 (RFC 8441)
+## 2️⃣ h2: WebSocket over HTTP/2 (RFC 8441)
 
 Uses:
 
@@ -111,9 +127,11 @@ Flow:
 
 No HTTP/1.1 upgrade involved.
 
+Typical use case: stable TLS/TCP path with strict ALPN negotiation and predictable middlebox compatibility.
+
 ---
 
-## 3️⃣ WebSocket over HTTP/3 (RFC 9220)
+## 3️⃣ h3: WebSocket over HTTP/3 (RFC 9220)
 
 Use when upstream supports HTTP/3 Extended CONNECT for WebSocket.
 
@@ -131,11 +149,13 @@ Behavior:
 * `h3=only` / `http3=only` enforces strict HTTP/3 mode (no fallback)
 * If `h3=1` and HTTP/3 fails, client falls back to h2/http1 path
 
+Typical use case: lower handshake latency and better resilience on lossy/mobile links where QUIC performs better than TCP.
+
 ---
 
-## 3️⃣ h2-only Mode
+## 4️⃣ Strict Mode Summary
 
-Strict HTTP/2 only:
+Strict **h2 only**:
 
 ```
 wss://example.com/tcp?h2=only
@@ -146,6 +166,18 @@ Behavior:
 * Fails fast if server does not advertise `SETTINGS_ENABLE_CONNECT_PROTOCOL`
 * No HTTP/1.1 fallback
 * Pure RFC8441 path
+
+Strict **h3 only**:
+
+```
+wss://example.com/tcp?h3=only
+```
+
+Behavior:
+
+* Fails fast if HTTP/3 (QUIC + RFC9220 CONNECT) is unavailable
+* No h2/h1 fallback
+* Useful for forced QUIC validation during rollout/testing
 
 ---
 
@@ -353,12 +385,44 @@ Requires:
 
 # TUN Mode
 
+TUN mode enables **system-level routing** through the client (not only app-level SOCKS5).
+When enabled, outbound packets entering the TUN interface are handled by the embedded tun2socks path and forwarded over the same Shadowsocks+WebSocket transport.
+
+> Current implementation expects a **pre-created TUN interface** and is primarily targeted for Linux setups.
+
 ```yaml
 tun:
   enable: true
   device: "tun0"
   mtu: 1500
 ```
+
+## What each field means
+
+* `tun.enable` — turns TUN mode on/off.
+* `tun.device` — interface name to open (must already exist before startup).
+* `tun.mtu` — link MTU (defaults to interface MTU or 1500 if unavailable).
+
+Additional optional tuning keys (if present in your config schema/build):
+
+* `tun.udp_max_flows` — max tracked UDP flow mappings.
+* `tun.udp_idle_timeout` — idle timeout for UDP flow GC.
+* `tun.udp_gc_interval` — garbage-collection interval for UDP flow table.
+
+## Typical Linux setup flow
+
+1. Create and bring up the TUN interface (for example, `tun0`).
+2. Assign IPv4/IPv6 addresses to that interface.
+3. Add route rules so selected/default traffic goes via `tun0`.
+4. Start `outline-cli-ws` with `tun.enable: true` and matching `tun.device`.
+5. Verify no routing loops (use `fwmark` policy routing when needed).
+
+## Operational notes
+
+* TUN mode requires elevated networking privileges (`root` or `CAP_NET_ADMIN`).
+* `fwmark` helps prevent routing loops when tunneled traffic could otherwise re-enter the same default route.
+* Health checks, balancing, and failover logic remain active in TUN mode.
+* For app-by-app routing, SOCKS5 mode may be simpler than full-system TUN routing.
 
 ---
 
