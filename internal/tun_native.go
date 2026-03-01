@@ -32,7 +32,7 @@ import (
 
 // ----- TUN open (existing interface created by script) -----
 
-func openExistingTun(name string) (*water.Interface, int, error) {
+func openExistingTun(name string, debug bool) (*water.Interface, int, error) {
 	if name == "" {
 		return nil, 0, fmt.Errorf("tun.device is empty")
 	}
@@ -47,6 +47,11 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 		return nil, 0, fmt.Errorf("open tun %q: %w", name, err)
 	}
 
+	if err := ensureTunPersistent(ifce, name, debug); err != nil {
+		_ = ifce.Close()
+		return nil, 0, err
+	}
+
 	ifi, err := net.InterfaceByName(name)
 	if err != nil {
 		_ = ifce.Close()
@@ -57,6 +62,24 @@ func openExistingTun(name string) (*water.Interface, int, error) {
 		mtu = 1500
 	}
 	return ifce, mtu, nil
+}
+
+func ensureTunPersistent(ifce *water.Interface, name string, debug bool) error {
+	f, ok := ifce.ReadWriteCloser.(*os.File)
+	if !ok {
+		return fmt.Errorf("tun %q: unexpected handle type %T", name, ifce.ReadWriteCloser)
+	}
+
+	if err := unix.IoctlSetInt(int(f.Fd()), unix.TUNSETPERSIST, 1); err != nil {
+		if err == unix.EPERM {
+			tunDebugf(debug, "failed to set TUNSETPERSIST for %q (continuing): %v", name, err)
+			return nil
+		}
+		return fmt.Errorf("set TUNSETPERSIST for %q: %w", name, err)
+	}
+
+	tunDebugf(debug, "TUN interface %q marked persistent", name)
+	return nil
 }
 
 func withNetNS(path string, fn func() error) error {
@@ -137,7 +160,7 @@ func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	)
 	err := withNetNS(cfg.NetNS, func() error {
 		var openErr error
-		ifce, mtu, openErr = openExistingTun(cfg.Device)
+		ifce, mtu, openErr = openExistingTun(cfg.Device, cfg.Debug)
 		return openErr
 	})
 	if err != nil {
