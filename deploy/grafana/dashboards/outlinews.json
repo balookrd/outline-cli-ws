@@ -57,7 +57,7 @@
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "bps"
         },
         "overrides": []
       },
@@ -89,7 +89,7 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m]))",
+          "expr": "sum(irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m])) * 8",
           "legendFormat": "",
           "range": true,
           "refId": "A"
@@ -116,7 +116,7 @@
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "bps"
         },
         "overrides": []
       },
@@ -148,7 +148,7 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum(irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m]))",
+          "expr": "sum(irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m])) * 8",
           "legendFormat": "",
           "range": true,
           "refId": "A"
@@ -307,7 +307,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps"
+          "unit": "bps"
         },
         "overrides": []
       },
@@ -336,7 +336,7 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (instance, upstream, proto) (irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m]))",
+          "expr": "sum by (instance, upstream, proto) (irate(outlinews_upstream_bytes_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[1m])) * 8",
           "legendFormat": "{{instance}} / {{upstream}} / {{proto}}",
           "range": true,
           "refId": "A"
@@ -529,7 +529,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps"
+          "unit": "bps"
         },
         "overrides": []
       },
@@ -558,7 +558,7 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (instance, dir) (irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m]))",
+          "expr": "sum by (instance, dir) (irate(outlinews_tun_bytes_total{instance=~\"$instance\"}[1m])) * 8",
           "legendFormat": "{{instance}} / {{dir}}",
           "range": true,
           "refId": "A"
