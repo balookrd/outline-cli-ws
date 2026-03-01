@@ -15,7 +15,7 @@ import (
 //
 // Ownership: caller must Close() the returned conn.
 func newSSTCPConn(ctx context.Context, wsc WSConn, up UpstreamConfig, dst string) (net.Conn, error) {
-	wsconn := NewWSStreamConn(ctx, wsc)
+	wsconn := NewWSStreamConn(ctx, wsc, up.Name, "tcp")
 
 	ciph, err := core.PickCipher(up.Cipher, nil, up.Secret)
 	if err != nil {

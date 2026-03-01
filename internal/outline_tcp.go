@@ -72,15 +72,17 @@ type WSStreamConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	c  WSConn
-	rb []byte
+	c        WSConn
+	rb       []byte
+	upstream string
+	proto    string
 
 	closeOnce sync.Once
 }
 
-func NewWSStreamConn(ctx context.Context, c WSConn) *WSStreamConn {
+func NewWSStreamConn(ctx context.Context, c WSConn, upstream, proto string) *WSStreamConn {
 	ctx2, cancel := context.WithCancel(ctx)
-	return &WSStreamConn{ctx: ctx2, cancel: cancel, c: c}
+	return &WSStreamConn{ctx: ctx2, cancel: cancel, c: c, upstream: upstream, proto: proto}
 }
 
 func (w *WSStreamConn) Read(p []byte) (int, error) {
@@ -92,6 +94,8 @@ func (w *WSStreamConn) Read(p []byte) (int, error) {
 		if typ != WSMessageBinary {
 			continue
 		}
+		observeWSFrame("in", len(data))
+		observeUpstreamTraffic(w.upstream, w.proto, "in", len(data))
 		w.rb = data
 	}
 	n := copy(p, w.rb)
@@ -103,6 +107,8 @@ func (w *WSStreamConn) Write(p []byte) (int, error) {
 	if err := w.c.Write(w.ctx, WSMessageBinary, p); err != nil {
 		return 0, err
 	}
+	observeWSFrame("out", len(p))
+	observeUpstreamTraffic(w.upstream, w.proto, "out", len(p))
 	return len(p), nil
 }
 
