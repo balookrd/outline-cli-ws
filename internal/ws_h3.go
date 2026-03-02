@@ -126,6 +126,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	}
 	wsDebugf("h3: request headers sent, waiting response")
+	handshakeStarted := time.Now()
 
 	respCh := make(chan map[string]string, 1)
 	errCh := make(chan error, 1)
@@ -141,10 +142,12 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	var resp map[string]string
 	select {
 	case <-h3ctx.Done():
+		elapsed := time.Since(handshakeStarted)
+		wsDebugf("h3: timeout/cancel while waiting response after %s (authority=%q path=%q err=%v)", elapsed, authority, cleanedRequestURI(u), h3ctx.Err())
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
 		if errors.Is(h3ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers")
+			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s", elapsed)
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
