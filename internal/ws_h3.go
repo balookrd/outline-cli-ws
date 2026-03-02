@@ -116,7 +116,9 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		wsDebugf("h3: write headers payload failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: request headers sent, waiting response")
+	wsDebugf("h3: request headers sent, closing request write side")
+	st.CloseWrite()
+	wsDebugf("h3: request stream write side closed, waiting response")
 
 	respCh := make(chan map[string]string, 1)
 	errCh := make(chan error, 1)
