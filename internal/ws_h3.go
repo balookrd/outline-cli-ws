@@ -209,7 +209,22 @@ func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
 			if err != nil {
 				return
 			}
-			go drainH3PeerStream(st)
+			go func(s *quic.Stream) {
+				// peer-initiated uni streams будут read-only
+				defer s.CloseRead()
+
+				if s.IsReadOnly() {
+					// H3 uni stream начинается с varint stream type (0=control,2,3=qpack)
+					typ, err := readVarint(s)
+					if err == nil {
+						wsDebugf("h3: peer stream accepted type=%d", typ)
+					}
+				} else {
+					wsDebugf("h3: peer bidi stream accepted")
+				}
+
+				_, _ = io.Copy(io.Discard, s)
+			}(st)
 		}
 	}()
 	return cancel
