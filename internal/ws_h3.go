@@ -52,6 +52,12 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	}
 	h3ctx, h3cancel := context.WithTimeout(ctx, h3HandshakeTimeout)
 	defer h3cancel()
+	effectiveH3Timeout := h3HandshakeTimeout
+	if ddl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(ddl); rem > 0 && rem < effectiveH3Timeout {
+			effectiveH3Timeout = rem
+		}
+	}
 
 	host := u.Hostname()
 	if host == "" {
@@ -66,7 +72,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		authority = host
 	}
 	dialAddr := net.JoinHostPort(host, port)
-	wsDebugf("h3: prepare dial host=%q port=%q authority=%q dial_addr=%q url=%q", host, port, authority, dialAddr, u.Redacted())
+	wsDebugf("h3: prepare dial host=%q port=%q authority=%q dial_addr=%q timeout=%s url=%q", host, port, authority, dialAddr, effectiveH3Timeout, u.Redacted())
 
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: host, NextProtos: []string{"h3"}}
 	qcConf := &quic.Config{TLSConfig: tlsConf}
@@ -147,7 +153,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
 		if errors.Is(h3ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s", elapsed)
+			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s (effective timeout %s)", elapsed, effectiveH3Timeout)
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
