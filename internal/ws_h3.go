@@ -53,12 +53,19 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	h3ctx, h3cancel := context.WithTimeout(ctx, h3HandshakeTimeout)
 	defer h3cancel()
 
-	host, port := splitHostPortDefault(u.Host, "443")
-	wsDebugf("h3: prepare dial host=%q port=%q url=%q", host, port, u.Redacted())
-	authority := net.JoinHostPort(host, port)
-	if strings.Contains(u.Host, ":") && strings.HasPrefix(u.Host, "[") {
-		authority = u.Host
+	host := u.Hostname()
+	if host == "" {
+		host, _ = splitHostPortDefault(u.Host, "443")
 	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	authority := u.Host
+	if authority == "" {
+		authority = net.JoinHostPort(host, port)
+	}
+	wsDebugf("h3: prepare dial host=%q port=%q authority=%q url=%q", host, port, authority, u.Redacted())
 
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: host, NextProtos: []string{"h3"}}
 	qcConf := &quic.Config{TLSConfig: tlsConf}
