@@ -158,7 +158,10 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		wsDebugf("h3: write headers payload failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: request headers sent, waiting response")
+	// x/net/quic may buffer stream data until scheduler tick; force flushing the
+	// CONNECT request headers so the server can respond promptly.
+	_ = st.Flush()
+	wsDebugf("h3: request headers sent, flushed, waiting response")
 	// IMPORTANT: do NOT close the client request stream here.
 	//
 	// RFC 9220 upgrades this very stream into a bidirectional WebSocket data
