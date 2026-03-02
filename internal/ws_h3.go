@@ -63,9 +63,10 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	}
 	authority := u.Host
 	if authority == "" {
-		authority = net.JoinHostPort(host, port)
+		authority = host
 	}
-	wsDebugf("h3: prepare dial host=%q port=%q authority=%q url=%q", host, port, authority, u.Redacted())
+	dialAddr := net.JoinHostPort(host, port)
+	wsDebugf("h3: prepare dial host=%q port=%q authority=%q dial_addr=%q url=%q", host, port, authority, dialAddr, u.Redacted())
 
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: host, NextProtos: []string{"h3"}}
 	qcConf := &quic.Config{TLSConfig: tlsConf}
@@ -74,14 +75,14 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		wsDebugf("h3: quic listen failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: quic endpoint ready, dialing authority=%q", authority)
-	qconn, err := ep.Dial(h3ctx, "udp", authority, qcConf)
+	wsDebugf("h3: quic endpoint ready, dialing addr=%q", dialAddr)
+	qconn, err := ep.Dial(h3ctx, "udp", dialAddr, qcConf)
 	if err != nil {
-		wsDebugf("h3: quic dial failed authority=%q err=%v", authority, err)
+		wsDebugf("h3: quic dial failed addr=%q err=%v", dialAddr, err)
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
-	wsDebugf("h3: quic dial established authority=%q", authority)
+	wsDebugf("h3: quic dial established addr=%q", dialAddr)
 
 	if err := h3SendClientSettings(h3ctx, qconn); err != nil {
 		wsDebugf("h3: send client settings failed err=%v", err)
