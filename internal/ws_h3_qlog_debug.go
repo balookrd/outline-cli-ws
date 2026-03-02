@@ -20,7 +20,7 @@ type h3QlogDebugHandler struct {
 }
 
 func (h *h3QlogDebugHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level <= quic.QLogLevelFrame
+	return level >= quic.QLogLevelFrame
 }
 
 func (h *h3QlogDebugHandler) Handle(_ context.Context, r slog.Record) error {
