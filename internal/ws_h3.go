@@ -159,6 +159,8 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	}
 	wsDebugf("h3: request headers sent, waiting response")
+	// ВАЖНО: дать серверу FIN на request stream, иначе x/net/quic может не отправить STREAM frames вообще.
+	st.CloseWrite()
 	handshakeStarted := time.Now()
 
 	respCh := make(chan map[string]string, 1)
