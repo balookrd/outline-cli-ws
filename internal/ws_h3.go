@@ -159,8 +159,12 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	}
 	wsDebugf("h3: request headers sent, waiting response")
-	// ВАЖНО: дать серверу FIN на request stream, иначе x/net/quic может не отправить STREAM frames вообще.
-	st.CloseWrite()
+	// IMPORTANT: do NOT close the client request stream here.
+	//
+	// RFC 9220 upgrades this very stream into a bidirectional WebSocket data
+	// channel after successful CONNECT response headers. Closing write-side at
+	// handshake time makes the resulting tunnel half-closed and breaks any
+	// client->upstream traffic (seen with QUIC proxy backends).
 	handshakeStarted := time.Now()
 
 	respCh := make(chan map[string]string, 1)
