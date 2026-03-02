@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -412,8 +413,25 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	}
 }
 
+const h3HealthcheckMinTimeout = 8 * time.Second
+
+func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return base
+	}
+	_, _, tryH3, h3Only := parseTransportHints(u.Query())
+	if (tryH3 || h3Only) && base < h3HealthcheckMinTimeout {
+		return h3HealthcheckMinTimeout
+	}
+	return base
+}
+
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS))
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
@@ -441,7 +459,7 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 }
 
 func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS))
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)

@@ -85,7 +85,7 @@ func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *UpstreamState)
 	}
 
 	// догреваем
-	cctx, cancel := context.WithTimeout(ctx, lb.hc.Timeout)
+	cctx, cancel := context.WithTimeout(ctx, wsDialTimeoutForURL(lb.hc.Timeout, up.cfg.TCPWSS))
 	defer cancel()
 
 	c, err := DialWSStream(cctx, up.cfg.TCPWSS, lb.fwmark)
