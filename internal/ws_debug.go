@@ -13,6 +13,6 @@ func SetWebSocketDebug(enabled bool) {
 
 func wsDebugf(format string, args ...any) {
 	if wsDebugEnabled.Load() {
-		log.Printf("[WSDEBUG] "+format, args...)
+		log.Printf("[debug] "+format, args...)
 	}
 }
