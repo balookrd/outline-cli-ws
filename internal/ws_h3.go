@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -145,9 +146,9 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	case resp = <-respCh:
 	}
-	wsDebugf("h3: response status=%q", resp[":status"])
+	wsDebugf("h3: response status=%q headers=%s", resp[":status"], h3FormatHeaders(resp))
 	if resp[":status"] != "200" {
-		return nil, fmt.Errorf("rfc9220 connect failed: status=%s", resp[":status"])
+		return nil, fmt.Errorf("rfc9220 connect failed: status=%s headers=%s", resp[":status"], h3FormatHeaders(resp))
 	}
 	if got := resp["sec-websocket-accept"]; got != "" && got != accept {
 		wsDebugf("h3: bad sec-websocket-accept got=%q", got)
@@ -217,6 +218,26 @@ func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
 			return h3DecodeHeaders(buf)
 		}
 	}
+}
+
+func h3FormatHeaders(h map[string]string) string {
+	if len(h) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := h[k]
+		if len(v) > 128 {
+			v = v[:128] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", k, v))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
 }
 
 func splitHostPortDefault(hostport, defPort string) (string, string) {
