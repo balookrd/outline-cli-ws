@@ -101,18 +101,18 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
 	}
 	wsDebugf("h3: writing HEADERS frame type")
-	if _, err := st.Write(appendVarint(nil, h3FrameHeaders)); err != nil {
+	if err := h3WriteWithContext(h3ctx, st, appendVarint(nil, h3FrameHeaders)); err != nil {
 		wsDebugf("h3: write frame type failed err=%v", err)
 		return nil, err
 	}
 	wsDebugf("h3: HEADERS frame type written")
 	wsDebugf("h3: writing HEADERS length=%d", len(headers))
-	if _, err := st.Write(appendVarint(nil, uint64(len(headers)))); err != nil {
+	if err := h3WriteWithContext(h3ctx, st, appendVarint(nil, uint64(len(headers)))); err != nil {
 		wsDebugf("h3: write headers length failed err=%v", err)
 		return nil, err
 	}
 	wsDebugf("h3: writing HEADERS payload")
-	if _, err := st.Write(headers); err != nil {
+	if err := h3WriteWithContext(h3ctx, st, headers); err != nil {
 		wsDebugf("h3: write headers payload failed err=%v", err)
 		return nil, err
 	}
@@ -162,20 +162,39 @@ func h3SendClientSettings(ctx context.Context, c *quic.Conn) error {
 	}
 	payload := appendVarint(nil, h3SettingEnableConnectProtocol)
 	payload = appendVarint(payload, 1)
-	if _, err := st.Write(appendVarint(nil, h3StreamControl)); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, h3StreamControl)); err != nil {
 		return err
 	}
-	if _, err := st.Write(appendVarint(nil, h3FrameSettings)); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, h3FrameSettings)); err != nil {
 		return err
 	}
-	if _, err := st.Write(appendVarint(nil, uint64(len(payload)))); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, uint64(len(payload)))); err != nil {
 		return err
 	}
-	if _, err := st.Write(payload); err != nil {
+	if err := h3WriteWithContext(ctx, st, payload); err != nil {
 		return err
 	}
 	st.CloseWrite()
 	return nil
+}
+
+func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := st.Write(b)
+		errCh <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		st.CloseWrite()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("h3 write timeout")
+		}
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
 }
 
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
