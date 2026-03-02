@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,7 @@ import (
 )
 
 const (
+	h3HandshakeTimeout             = 12 * time.Second
 	h3FrameData                    = 0x0
 	h3FrameHeaders                 = 0x1
 	h3FrameSettings                = 0x4
@@ -47,6 +49,9 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if u.Scheme != "wss" && u.Scheme != "https" {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
+	h3ctx, h3cancel := context.WithTimeout(ctx, h3HandshakeTimeout)
+	defer h3cancel()
+
 	host, port := splitHostPortDefault(u.Host, "443")
 	wsDebugf("h3: prepare dial host=%q port=%q url=%q", host, port, u.Redacted())
 	authority := net.JoinHostPort(host, port)
@@ -62,7 +67,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	}
 	wsDebugf("h3: quic endpoint ready, dialing authority=%q", authority)
-	qconn, err := ep.Dial(ctx, "udp", authority, qcConf)
+	qconn, err := ep.Dial(h3ctx, "udp", authority, qcConf)
 	if err != nil {
 		wsDebugf("h3: quic dial failed authority=%q err=%v", authority, err)
 		_ = ep.Close(context.Background())
@@ -70,7 +75,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	}
 	wsDebugf("h3: quic dial established authority=%q", authority)
 
-	if err := h3SendClientSettings(ctx, qconn); err != nil {
+	if err := h3SendClientSettings(h3ctx, qconn); err != nil {
 		wsDebugf("h3: send client settings failed err=%v", err)
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
@@ -78,7 +83,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	}
 	wsDebugf("h3: client settings sent")
 
-	st, err := qconn.NewStream(ctx)
+	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
 		wsDebugf("h3: open request stream failed err=%v", err)
 		_ = qconn.Close()
@@ -95,20 +100,48 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if origin := u.Query().Get("origin"); origin != "" {
 		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
 	}
+	wsDebugf("h3: writing HEADERS frame type")
 	if _, err := st.Write(appendVarint(nil, h3FrameHeaders)); err != nil {
+		wsDebugf("h3: write frame type failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: HEADERS frame type written")
+	wsDebugf("h3: writing HEADERS length=%d", len(headers))
 	if _, err := st.Write(appendVarint(nil, uint64(len(headers)))); err != nil {
+		wsDebugf("h3: write headers length failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: writing HEADERS payload")
 	if _, err := st.Write(headers); err != nil {
+		wsDebugf("h3: write headers payload failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: request headers sent, waiting response")
 
-	resp, err := h3ReadResponseHeaders(st)
-	if err != nil {
+	respCh := make(chan map[string]string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		resp, err := h3ReadResponseHeaders(st)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		respCh <- resp
+	}()
+
+	var resp map[string]string
+	select {
+	case <-h3ctx.Done():
+		_ = qconn.Close()
+		_ = ep.Close(context.Background())
+		if errors.Is(h3ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers")
+		}
+		return nil, h3ctx.Err()
+	case err := <-errCh:
 		wsDebugf("h3: read response headers failed err=%v", err)
 		return nil, err
+	case resp = <-respCh:
 	}
 	wsDebugf("h3: response status=%q", resp[":status"])
 	if resp[":status"] != "200" {
