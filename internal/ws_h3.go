@@ -252,8 +252,7 @@ func drainH3PeerStream(st *quic.Stream) {
 }
 
 func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
-	// Open client control stream and send SETTINGS_ENABLE_CONNECT_PROTOCOL.
-	// This is required for RFC 9220 Extended CONNECT.
+	// 1) Control stream + SETTINGS_ENABLE_CONNECT_PROTOCOL.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
 		return err
@@ -272,9 +271,28 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
 	if err := h3WriteWithContext(ctx, st, payload); err != nil {
 		return err
 	}
-
-	// Ensure SETTINGS are sent without ending the control stream.
 	_ = st.Flush()
+
+	// 2) Some strict H3 stacks expect client QPACK uni streams to be present
+	// before processing request streams. Open both streams and send only the
+	// stream-type varint (no encoder instructions).
+	qenc, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qenc, appendVarint(nil, h3StreamQpackEncoder)); err != nil {
+		return err
+	}
+	_ = qenc.Flush()
+
+	qdec, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qdec, appendVarint(nil, h3StreamQpackDecoder)); err != nil {
+		return err
+	}
+	_ = qdec.Flush()
 	return nil
 }
 
