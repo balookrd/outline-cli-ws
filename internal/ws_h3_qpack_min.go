@@ -38,7 +38,7 @@ func h3EncodeHeaders(headers [][2]string) []byte {
 			continue
 		}
 		if idxName >= 0 {
-			b = appendPrefixedInt(b, 0b0100_0000|0b0001_0000, 4, int64(idxName))
+			b = appendPrefixedInt(b, 0b0100_0000, 4, int64(idxName)) // Literal with Name Reference, N=0
 			b = appendPrefixedString(b, 0, 7, value)
 			continue
 		}
