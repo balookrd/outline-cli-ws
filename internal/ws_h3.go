@@ -214,8 +214,9 @@ func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
 }
 
 func drainH3PeerStream(st *quic.Stream) {
+	// Peer-initiated streams in H3 are usually unidirectional control/QPACK streams.
+	// As a receiver, we MUST NOT write to them.
 	defer st.CloseRead()
-	defer st.CloseWrite()
 	typ, err := readVarint(st)
 	if err != nil {
 		return
