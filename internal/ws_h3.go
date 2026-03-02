@@ -61,9 +61,11 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if port == "" {
 		port = "443"
 	}
-	authority := u.Host
-	if authority == "" {
-		authority = host
+	authority := net.JoinHostPort(host, port)
+	if u.Host != "" {
+		if _, p, err := net.SplitHostPort(u.Host); err == nil && p != "" {
+			authority = u.Host
+		}
 	}
 	dialAddr := net.JoinHostPort(host, port)
 	wsDebugf("h3: prepare dial host=%q port=%q authority=%q dial_addr=%q url=%q", host, port, authority, dialAddr, u.Redacted())
