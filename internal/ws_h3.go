@@ -252,7 +252,8 @@ func drainH3PeerStream(st *quic.Stream) {
 }
 
 func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
-	// 1) Control stream + SETTINGS. ВАЖНО: не закрываем control stream.
+	// Open client control stream and send SETTINGS_ENABLE_CONNECT_PROTOCOL.
+	// This is required for RFC 9220 Extended CONNECT.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
 		return err
@@ -272,30 +273,8 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
 		return err
 	}
 
-	// Желательно “протолкнуть” данные (x/net/quic буферизует).
+	// Ensure SETTINGS are sent without ending the control stream.
 	_ = st.Flush()
-
-	// 2) QPACK streams. Можно ничего не слать кроме типа stream, но поток должен существовать.
-	qenc, err := c.NewSendOnlyStream(ctx)
-	if err != nil {
-		return err
-	}
-	if err := h3WriteWithContext(ctx, qenc, appendVarint(nil, h3StreamQpackEncoder)); err != nil {
-		return err
-	}
-	_ = qenc.Flush()
-
-	qdec, err := c.NewSendOnlyStream(ctx)
-	if err != nil {
-		return err
-	}
-	if err := h3WriteWithContext(ctx, qdec, appendVarint(nil, h3StreamQpackDecoder)); err != nil {
-		return err
-	}
-	_ = qdec.Flush()
-
-	// НЕ делаем CloseWrite() ни на одном из этих потоков.
-	// Они должны оставаться открытыми пока живо соединение.
 	return nil
 }
 
