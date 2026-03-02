@@ -123,6 +123,9 @@ func parseTransportHints(q url.Values) (tryH2, h2Only, tryH3, h3Only bool) {
 	h2Only = q.Get("h2") == "only" || q.Get("http2") == "only" || q.Get("h2only") == "1"
 	tryH3 = q.Get("h3") == "1" || q.Get("http3") == "1" || q.Get("quic") == "1"
 	h3Only = q.Get("h3") == "only" || q.Get("http3") == "only" || q.Get("h3only") == "1" || q.Get("quic") == "only"
+	if h3Only {
+		tryH3 = true
+	}
 	return
 }
 

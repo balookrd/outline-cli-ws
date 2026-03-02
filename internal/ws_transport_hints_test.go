@@ -22,8 +22,18 @@ func TestParseTransportHintsOnlyModes(t *testing.T) {
 	q.Set("quic", "only")
 
 	tryH2, h2Only, tryH3, h3Only := parseTransportHints(q)
-	if tryH2 || !h2Only || tryH3 || !h3Only {
+	if tryH2 || !h2Only || !tryH3 || !h3Only {
 		t.Fatalf("unexpected only-hint parse: tryH2=%v h2Only=%v tryH3=%v h3Only=%v", tryH2, h2Only, tryH3, h3Only)
+	}
+}
+
+func TestParseTransportHintsH3OnlyWithoutTryFlag(t *testing.T) {
+	q := url.Values{}
+	q.Set("h3", "only")
+
+	_, _, tryH3, h3Only := parseTransportHints(q)
+	if !tryH3 || !h3Only {
+		t.Fatalf("unexpected h3-only parse: tryH3=%v h3Only=%v", tryH3, h3Only)
 	}
 }
 
