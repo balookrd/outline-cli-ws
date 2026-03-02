@@ -30,14 +30,18 @@ const (
 )
 
 type h3wsStream struct {
-	s  *quic.Stream
-	qc *quic.Conn
-	ep *quic.Endpoint
+	s               *quic.Stream
+	qc              *quic.Conn
+	ep              *quic.Endpoint
+	stopPeerDrainer context.CancelFunc
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
 func (s *h3wsStream) Write(p []byte) (int, error) { return s.s.Write(p) }
 func (s *h3wsStream) Close() error {
+	if s.stopPeerDrainer != nil {
+		s.stopPeerDrainer()
+	}
 	s.s.CloseRead()
 	s.s.CloseWrite()
 	_ = s.qc.Close()
@@ -106,11 +110,17 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, err
 	}
 	wsDebugf("h3: quic dial established addr=%q", dialAddr)
+	peerDrainCancel := startH3PeerStreamDrainer(qconn)
+	h3Established := false
+	defer func() {
+		if h3Established {
+			return
+		}
+		peerDrainCancel()
+	}()
 
 	if err := h3SendClientSettings(h3ctx, qconn); err != nil {
 		wsDebugf("h3: send client settings failed err=%v", err)
-		_ = qconn.Close()
-		_ = ep.Close(context.Background())
 		return nil, err
 	}
 	wsDebugf("h3: client settings sent")
@@ -118,8 +128,6 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
 		wsDebugf("h3: open request stream failed err=%v", err)
-		_ = qconn.Close()
-		_ = ep.Close(context.Background())
 		return nil, err
 	}
 	wsDebugf("h3: request stream opened")
@@ -187,7 +195,33 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, fmt.Errorf("rfc9220 bad sec-websocket-accept")
 	}
 	wsDebugf("h3: websocket CONNECT established")
-	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep}), nil
+	h3Established = true
+	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
+}
+
+func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			st, err := c.AcceptStream(ctx)
+			if err != nil {
+				return
+			}
+			go drainH3PeerStream(st)
+		}
+	}()
+	return cancel
+}
+
+func drainH3PeerStream(st *quic.Stream) {
+	defer st.CloseRead()
+	defer st.CloseWrite()
+	typ, err := readVarint(st)
+	if err != nil {
+		return
+	}
+	wsDebugf("h3: peer stream accepted type=%d", typ)
+	_, _ = io.Copy(io.Discard, st)
 }
 
 func h3SendClientSettings(ctx context.Context, c *quic.Conn) error {
