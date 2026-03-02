@@ -51,13 +51,25 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if u.Scheme != "wss" && u.Scheme != "https" {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
-	h3ctx, h3cancel := context.WithTimeout(ctx, h3HandshakeTimeout)
-	defer h3cancel()
+	h3BaseCtx := ctx
 	effectiveH3Timeout := h3HandshakeTimeout
 	if ddl, ok := ctx.Deadline(); ok {
 		if rem := time.Until(ddl); rem > 0 && rem < effectiveH3Timeout {
-			effectiveH3Timeout = rem
+			// Some call sites use short per-attempt deadlines (~3s) that are too
+			// aggressive for RFC9220/QUIC handshake and can cause false failures.
+			// Keep context values but ignore the deadline; preserve explicit cancel.
+			h3BaseCtx = context.WithoutCancel(ctx)
 		}
+	}
+	h3ctx, h3cancel := context.WithTimeout(h3BaseCtx, effectiveH3Timeout)
+	defer h3cancel()
+	if h3BaseCtx != ctx {
+		go func(parent context.Context) {
+			<-parent.Done()
+			if !errors.Is(parent.Err(), context.DeadlineExceeded) {
+				h3cancel()
+			}
+		}(ctx)
 	}
 
 	host := u.Hostname()
@@ -158,7 +170,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
 		if errors.Is(h3ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s (effective timeout %s)", elapsed, effectiveH3Timeout)
+			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s", elapsed)
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
