@@ -54,6 +54,10 @@ type TunConfig struct {
 	UDPFlowIdleTimeout time.Duration
 }
 
+type WebSocketConfig struct {
+	Debug bool
+}
+
 type Config struct {
 	Upstreams    []UpstreamConfig
 	Healthcheck  HealthcheckConfig
@@ -61,5 +65,6 @@ type Config struct {
 	Probe        ProbeConfig
 	Fwmark       uint32
 	Tun          TunConfig
+	WebSocket    WebSocketConfig
 	Socks5Listen string
 }
