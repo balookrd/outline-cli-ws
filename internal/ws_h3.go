@@ -26,6 +26,8 @@ const (
 	h3FrameHeaders                 = 0x1
 	h3FrameSettings                = 0x4
 	h3StreamControl                = 0x0
+	h3StreamQpackEncoder           = 0x2
+	h3StreamQpackDecoder           = 0x3
 	h3SettingEnableConnectProtocol = 0x08
 )
 
@@ -119,11 +121,11 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		peerDrainCancel()
 	}()
 
-	if err := h3SendClientSettings(h3ctx, qconn); err != nil {
-		wsDebugf("h3: send client settings failed err=%v", err)
+	if err := h3OpenClientUniStreams(h3ctx, qconn); err != nil {
+		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: client settings sent")
+	wsDebugf("h3: client control/qpack streams opened")
 
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
@@ -225,7 +227,8 @@ func drainH3PeerStream(st *quic.Stream) {
 	_, _ = io.Copy(io.Discard, st)
 }
 
-func h3SendClientSettings(ctx context.Context, c *quic.Conn) error {
+func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
+	// 1) Control stream + SETTINGS. ВАЖНО: не закрываем control stream.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
 		return err
@@ -244,7 +247,31 @@ func h3SendClientSettings(ctx context.Context, c *quic.Conn) error {
 	if err := h3WriteWithContext(ctx, st, payload); err != nil {
 		return err
 	}
-	st.CloseWrite()
+
+	// Желательно “протолкнуть” данные (x/net/quic буферизует).
+	_ = st.Flush()
+
+	// 2) QPACK streams. Можно ничего не слать кроме типа stream, но поток должен существовать.
+	qenc, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qenc, appendVarint(nil, h3StreamQpackEncoder)); err != nil {
+		return err
+	}
+	_ = qenc.Flush()
+
+	qdec, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qdec, appendVarint(nil, h3StreamQpackDecoder)); err != nil {
+		return err
+	}
+	_ = qdec.Flush()
+
+	// НЕ делаем CloseWrite() ни на одном из этих потоков.
+	// Они должны оставаться открытыми пока живо соединение.
 	return nil
 }
 
