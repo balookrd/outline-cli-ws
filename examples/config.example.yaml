@@ -3,6 +3,9 @@ listen:
 
 fwmark: 0
 
+websocket:
+  debug: false # verbose websocket transport diagnostics (h1/h2/h3/quic)
+
 tun:
   device: "" # empty = TUN disabled; set e.g. "tun0" to enable
   mtu: 1500

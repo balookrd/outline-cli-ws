@@ -26,6 +26,11 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
+	outlinews.SetWebSocketDebug(cfg.WebSocket.Debug)
+	if cfg.WebSocket.Debug {
+		log.Printf("WebSocket debug logging is enabled")
+	}
+
 	lb := outlinews.NewLoadBalancer(cfg.Upstreams, cfg.Healthcheck, cfg.Selection, cfg.Probe, cfg.Fwmark)
 
 	ctx, cancel := context.WithCancel(context.Background())

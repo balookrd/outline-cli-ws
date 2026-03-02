@@ -188,26 +188,6 @@ Some Go builds gate Extended CONNECT:
 GODEBUG=http2xconnect=1
 ```
 
----
-
-# Debug Mode
-
-Enable detailed transport logs:
-
-```
-OUTLINE_WS_DEBUG=1 ./outline-cli-ws -c config.yaml
-```
-
-Shows:
-
-* TLS handshake
-* ALPN
-* HTTP/2 SETTINGS
-* WINDOW_UPDATE
-* HEADERS
-* DATA frames
-* WebSocket CLOSE codes
-* Stream reopen events
 
 ---
 
@@ -368,6 +348,13 @@ Mark upstream sockets:
 fwmark: 123
 ```
 
+WebSocket transport diagnostics:
+
+```yaml
+websocket:
+  debug: false # detailed handshake logs for h1/h2/h3/quic
+```
+
 Routing example:
 
 ```
@@ -405,6 +392,7 @@ tun:
 * `tun.mtu` — link MTU (defaults to interface MTU or 1500 if unavailable).
 * `tun.netns` — optional Linux network namespace path where the TUN device exists (for example `/var/run/netns/tun`).
 * `tun.debug` — enables extra TUN diagnostics in logs (flows, DNS-forward path, read/write errors).
+* `websocket.debug` — enables verbose transport diagnostics for upstream WebSocket dialing (h1/h2/h3, including QUIC/H3 attempts and fallbacks).
 
 Additional optional tuning keys (if present in your config schema/build):
 

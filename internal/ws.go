@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -66,17 +65,21 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 
 	tryH2, h2Only, tryH3, h3Only := parseTransportHints(u.Query())
+	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v", u.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only)
 
 	if tryH3 && isWebSocketLikeScheme(u.Scheme) {
+		wsDebugf("attempt h3/rfc9220 dial url=%q", u.Redacted())
 		h3c, h3err := dialRFC9220(ctx, u)
 		if h3err == nil {
+			wsDebugf("h3/rfc9220 dial succeeded url=%q", u.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h3c, nil
 		}
+		wsDebugf("h3/rfc9220 dial failed url=%q err=%v", u.Redacted(), h3err)
 		if h3Only {
 			return nil, fmt.Errorf("h3-only connect failed: %w", h3err)
 		}
-		log.Printf("[WS] upstream %q requested ws-over-quic mode, h3 failed (%v), trying h2/http1 fallback", u.Redacted(), h3err)
+		wsDebugf("fallback to h2/http1 after h3 failure url=%q", u.Redacted())
 		if !tryH2 {
 			tryH2 = true
 		}
@@ -88,20 +91,26 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		if !isWebSocketLikeScheme(u.Scheme) {
 			return nil, fmt.Errorf("h2-only mode requires ws/wss URL, got scheme=%q", u.Scheme)
 		}
+		wsDebugf("attempt h2/rfc8441 dial url=%q", u.Redacted())
 		h2c, h2err := dialRFC8441(ctx, u, tr)
 		if h2err == nil {
+			wsDebugf("h2/rfc8441 dial succeeded url=%q", u.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
+		wsDebugf("h2-only dial failed url=%q err=%v", u.Redacted(), h2err)
 		return nil, fmt.Errorf("h2-only connect failed: %w", h2err)
 	}
 
 	if tryH2 && isWebSocketLikeScheme(u.Scheme) {
+		wsDebugf("attempt h2/rfc8441 dial url=%q", u.Redacted())
 		h2c, h2err := dialRFC8441(ctx, u, tr)
 		if h2err == nil {
+			wsDebugf("h2/rfc8441 dial succeeded url=%q", u.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
+		wsDebugf("h2/rfc8441 dial failed url=%q err=%v", u.Redacted(), h2err)
 		// Only fall back on "not supported" style errors; otherwise surface.
 		if !errors.Is(h2err, errRFC8441NotSupported) {
 			return nil, h2err
@@ -110,10 +119,13 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 
 	// Classic websocket (HTTP/1.1 upgrade).
+	wsDebugf("attempt h1 websocket upgrade url=%q", u.Redacted())
 	c, err := dialCoderWebSocket(ctx, u.String(), tr)
 	if err != nil {
+		wsDebugf("h1 websocket upgrade failed url=%q err=%v", u.Redacted(), err)
 		return nil, err
 	}
+	wsDebugf("h1 websocket upgrade succeeded url=%q", u.Redacted())
 	observeDial(upstream, proto, time.Since(start))
 	return c, nil
 }

@@ -12,11 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -29,19 +27,6 @@ const (
 	rawH2MaxDataFrameChunk = 16 * 1024
 	rawH2WindowUpdateBatch = 64 * 1024
 )
-
-var rfc8441Debug = os.Getenv("OUTLINE_WS_DEBUG") != ""
-
-func rfcdbg(prefix, format string, args ...any) {
-	if !rfc8441Debug {
-		return
-	}
-	if prefix != "" {
-		log.Printf("[RFC8441|%s] "+format, append([]any{prefix}, args...)...)
-		return
-	}
-	log.Printf("[RFC8441] "+format, args...)
-}
 
 var errRFC8441HandshakeFailed = errors.New("rfc8441 handshake failed")
 
@@ -70,8 +55,7 @@ func dialRFC8441RawH2(ctx context.Context, u *url.URL, tr *http.Transport) (WSCo
 		dialCtx = dialer.DialContext
 	}
 
-	prefix := fmt.Sprintf("%s%s", host, u.Path)
-	rfcdbg(prefix, "dial tcp %s (sni=%q path=%q)", host, u.Hostname(), u.Path)
+	wsDebugf("h2raw: dial tcp host=%q sni=%q path=%q", host, u.Hostname(), u.Path)
 	tcpConn, err := dialCtx(ctx, "tcp", host)
 	if err != nil {
 		return nil, err
@@ -107,32 +91,30 @@ func dialRFC8441RawH2(ctx context.Context, u *url.URL, tr *http.Transport) (WSCo
 	}
 
 	tlsConn := tls.Client(tcpConn, tlsConf)
-	rfcdbg(prefix, "tls handshake start (servername=%q nextprotos=%v)", tlsConf.ServerName, tlsConf.NextProtos)
+	wsDebugf("h2raw: tls handshake start servername=%q", tlsConf.ServerName)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		_ = tlsConn.Close()
 		return nil, err
 	}
-	rfcdbg(prefix, "tls handshake ok (alpn=%q tls=%x)", tlsConn.ConnectionState().NegotiatedProtocol, tlsConn.ConnectionState().Version)
+	wsDebugf("h2raw: tls handshake done negotiated_alpn=%q", tlsConn.ConnectionState().NegotiatedProtocol)
 	if tlsConn.ConnectionState().NegotiatedProtocol != "h2" {
 		_ = tlsConn.Close()
 		return nil, fmt.Errorf("rfc8441 requires h2 ALPN, negotiated %q", tlsConn.ConnectionState().NegotiatedProtocol)
 	}
 
-	cc := newRawH2Conn(tlsConn, prefix)
-	rfcdbg(prefix, "h2 init start")
+	cc := newRawH2Conn(tlsConn)
+	wsDebugf("h2raw: init connection")
 	if err := cc.init(ctx); err != nil {
 		_ = cc.Close()
 		return nil, err
 	}
-	rfcdbg(prefix, "h2 init ok")
 
-	rfcdbg(prefix, "open websocket stream start")
+	wsDebugf("h2raw: open websocket stream")
 	ws, err := cc.openWebSocketStream(ctx, u)
 	if err != nil {
 		_ = cc.Close()
 		return nil, err
 	}
-	rfcdbg(prefix, "open websocket stream ok")
 	return ws, nil
 }
 
@@ -150,11 +132,9 @@ type rawH2Conn struct {
 	strWindow  uint32
 
 	closed chan struct{}
-
-	dbgPrefix string
 }
 
-func newRawH2Conn(c net.Conn, dbgPrefix string) *rawH2Conn {
+func newRawH2Conn(c net.Conn) *rawH2Conn {
 	br := bufio.NewReaderSize(c, 32*1024)
 	bw := bufio.NewWriterSize(c, 32*1024)
 	fr := http2.NewFramer(bw, br)
@@ -168,7 +148,6 @@ func newRawH2Conn(c net.Conn, dbgPrefix string) *rawH2Conn {
 		connWindow: 65535,
 		strWindow:  65535,
 		closed:     make(chan struct{}),
-		dbgPrefix:  dbgPrefix,
 	}
 }
 
@@ -183,7 +162,6 @@ func (c *rawH2Conn) init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rfcdbg(c.dbgPrefix, "h2 preface sent")
 
 	// SETTINGS
 	// RFC 8441 requires SETTINGS_ENABLE_CONNECT_PROTOCOL=1 to be negotiated
@@ -196,7 +174,6 @@ func (c *rawH2Conn) init(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	rfcdbg(c.dbgPrefix, "h2 settings sent (ENABLE_CONNECT_PROTOCOL=1)")
 
 	// Read server SETTINGS, ACK it.
 	// We also check whether the server advertises SETTINGS_ENABLE_CONNECT_PROTOCOL=1.
@@ -228,16 +205,11 @@ func (c *rawH2Conn) init(ctx context.Context) error {
 		}); err != nil {
 			return err // или: return fmt.Errorf("foreach setting: %w", err)
 		}
-		if found {
-			rfcdbg(c.dbgPrefix, "server SETTINGS_ENABLE_CONNECT_PROTOCOL=%d", serverEnable)
-		} else {
-			rfcdbg(c.dbgPrefix, "server did not advertise SETTINGS_ENABLE_CONNECT_PROTOCOL")
-		}
+		wsDebugf("h2raw: server SETTINGS_ENABLE_CONNECT_PROTOCOL present=%v val=%d", found, serverEnable)
 		if !found || serverEnable != 1 {
 			return fmt.Errorf("rfc8441 not supported by server: SETTINGS_ENABLE_CONNECT_PROTOCOL=%d (present=%v)", serverEnable, found)
 		}
 		// ACK settings
-		rfcdbg(c.dbgPrefix, "h2 settings received from server, sending ACK")
 		return c.writeFrame(func() error { return c.fr.WriteSettingsAck() })
 	}
 }
@@ -256,7 +228,6 @@ func (c *rawH2Conn) openWebSocketStream(ctx context.Context, u *url.URL) (WSConn
 	path := cleanedRequestURI(u)
 	// Use authority from URL (includes port when non-default).
 	authority := u.Host
-	rfcdbg(c.dbgPrefix, "request CONNECT :authority=%q :path=%q :protocol=websocket", authority, path)
 
 	// HPACK encode request headers
 	var hb strings.Builder
@@ -273,6 +244,7 @@ func (c *rawH2Conn) openWebSocketStream(ctx context.Context, u *url.URL) (WSConn
 	}
 
 	// Send HEADERS on stream 1.
+	wsDebugf("h2raw: send CONNECT :authority=%q :path=%q", authority, path)
 	if err := c.writeFrame(func() error {
 		return c.fr.WriteHeaders(http2.HeadersFrameParam{
 			StreamID:      1,
@@ -283,14 +255,13 @@ func (c *rawH2Conn) openWebSocketStream(ctx context.Context, u *url.URL) (WSConn
 	}); err != nil {
 		return nil, err
 	}
-	rfcdbg(c.dbgPrefix, "sent request HEADERS (len=%d)", len(hb.String()))
 
 	// Read response HEADERS for stream 1.
 	status, hdrs, err := c.readResponseHeaders(ctx, 1)
 	if err != nil {
 		return nil, err
 	}
-	rfcdbg(c.dbgPrefix, "got response HEADERS status=%q sec-websocket-accept=%q", status, hdrs["sec-websocket-accept"])
+	wsDebugf("h2raw: response status=%q", status)
 	if status != "200" {
 		return nil, fmt.Errorf("%w: unexpected status %s", errRFC8441HandshakeFailed, status)
 	}
@@ -416,25 +387,7 @@ decode:
 func (c *rawH2Conn) readFrame() (http2.Frame, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
-	f, err := c.fr.ReadFrame()
-	if err == nil {
-		h := f.Header()
-		switch ff := f.(type) {
-		case *http2.RSTStreamFrame:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d errcode=%v", h.Type, h.StreamID, h.Length, ff.ErrCode)
-		case *http2.GoAwayFrame:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d errcode=%v lastStream=%d", h.Type, h.StreamID, h.Length, ff.ErrCode, ff.LastStreamID)
-		case *http2.HeadersFrame:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d endHeaders=%v endStream=%v", h.Type, h.StreamID, h.Length, ff.HeadersEnded(), ff.StreamEnded())
-		case *http2.MetaHeadersFrame:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d metaHeaders fields=%d", h.Type, h.StreamID, h.Length, len(ff.Fields))
-		case *http2.ContinuationFrame:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d endHeaders=%v", h.Type, h.StreamID, h.Length, ff.HeadersEnded())
-		default:
-			rfcdbg(c.dbgPrefix, "recv frame type=%v stream=%d len=%d", h.Type, h.StreamID, h.Length)
-		}
-	}
-	return f, err
+	return c.fr.ReadFrame()
 }
 
 func (c *rawH2Conn) writeFrame(fn func() error) error {

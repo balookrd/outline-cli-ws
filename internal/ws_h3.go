@@ -48,6 +48,7 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
 	host, port := splitHostPortDefault(u.Host, "443")
+	wsDebugf("h3: prepare dial host=%q port=%q url=%q", host, port, u.Redacted())
 	authority := net.JoinHostPort(host, port)
 	if strings.Contains(u.Host, ":") && strings.HasPrefix(u.Host, "[") {
 		authority = u.Host
@@ -57,26 +58,34 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	qcConf := &quic.Config{TLSConfig: tlsConf}
 	ep, err := quic.Listen("udp", ":0", qcConf)
 	if err != nil {
+		wsDebugf("h3: quic listen failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: quic endpoint ready, dialing authority=%q", authority)
 	qconn, err := ep.Dial(ctx, "udp", authority, qcConf)
 	if err != nil {
+		wsDebugf("h3: quic dial failed authority=%q err=%v", authority, err)
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
+	wsDebugf("h3: quic dial established authority=%q", authority)
 
 	if err := h3SendClientSettings(ctx, qconn); err != nil {
+		wsDebugf("h3: send client settings failed err=%v", err)
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
+	wsDebugf("h3: client settings sent")
 
 	st, err := qconn.NewStream(ctx)
 	if err != nil {
+		wsDebugf("h3: open request stream failed err=%v", err)
 		_ = qconn.Close()
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
+	wsDebugf("h3: request stream opened")
 
 	key, accept, err := h3WebSocketKeyAccept()
 	if err != nil {
@@ -98,14 +107,18 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 
 	resp, err := h3ReadResponseHeaders(st)
 	if err != nil {
+		wsDebugf("h3: read response headers failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: response status=%q", resp[":status"])
 	if resp[":status"] != "200" {
 		return nil, fmt.Errorf("rfc9220 connect failed: status=%s", resp[":status"])
 	}
 	if got := resp["sec-websocket-accept"]; got != "" && got != accept {
+		wsDebugf("h3: bad sec-websocket-accept got=%q", got)
 		return nil, fmt.Errorf("rfc9220 bad sec-websocket-accept")
 	}
+	wsDebugf("h3: websocket CONNECT established")
 	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep}), nil
 }
 
