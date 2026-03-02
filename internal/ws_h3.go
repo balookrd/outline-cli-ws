@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -76,6 +77,10 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: host, NextProtos: []string{"h3"}}
 	qcConf := &quic.Config{TLSConfig: tlsConf}
+	if wsDebugEnabled.Load() {
+		qcConf.QLogLogger = slog.New(&h3QlogDebugHandler{})
+		wsDebugf("h3: qlog packet tracing enabled (first %d sent/recv packets)", h3QlogFirstPackets)
+	}
 	ep, err := quic.Listen("udp", ":0", qcConf)
 	if err != nil {
 		wsDebugf("h3: quic listen failed err=%v", err)
