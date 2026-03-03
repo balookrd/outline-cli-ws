@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"sync"
@@ -413,7 +414,10 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	}
 }
 
-const h3HealthcheckMinTimeout = 8 * time.Second
+// RFC 9220 (WebSocket over HTTP/3) performs a full QUIC+TLS handshake before
+// we can exchange CONNECT headers. Keep HC timeout floor aligned with the
+// dedicated handshake budget to avoid premature healthcheck cancellations.
+const h3HealthcheckMinTimeout = h3HandshakeTimeout
 
 func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
 	if base <= 0 {
@@ -431,10 +435,15 @@ func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
 }
 
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS))
+	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS)
+	started := time.Now()
+	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	if err != nil {
+		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
+	}
 	if err == nil && lb.probe.EnableTCP {
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
 		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
@@ -462,10 +471,15 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 }
 
 func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS))
+	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS)
+	started := time.Now()
+	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	if err != nil {
+		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
+	}
 	if err == nil && lb.probe.EnableUDP {
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
 		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
@@ -508,6 +522,7 @@ func (lb *LoadBalancer) applyHCResult(h *hcState, err error, rtt time.Duration,
 
 		h.hcEvery = lb.nextIntervalOnFailure(*h)
 		h.nextHC = time.Now().Add(applyJitter(h.hcEvery, lb.hc.Jitter))
+		log.Printf("[HC|%s] %s probe failed: err=%v fail_count=%d/%d healthy=%t next_check_in=%s", proto, name, err, h.failCount, lb.hc.FailThreshold, h.healthy, time.Until(h.nextHC))
 		return
 	}
 
@@ -529,6 +544,8 @@ func (lb *LoadBalancer) applyHCResult(h *hcState, err error, rtt time.Duration,
 		}
 		h.healthy = true
 		setHealthy(name, proto, true)
+	} else if !h.healthy {
+		log.Printf("[HC|%s] %s success progress: %d/%d before marked UP (rtt=%s)", proto, name, h.successCount, lb.hc.SuccessThreshold, h.rttEWMA)
 	}
 
 	h.hcEvery = lb.nextIntervalOnSuccess(*h)
