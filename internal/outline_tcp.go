@@ -103,6 +103,7 @@ func (w *WSStreamConn) Read(p []byte) (int, error) {
 		}
 		observeWSFrame("in", len(data))
 		observeUpstreamTraffic(w.upstream, w.proto, "in", len(data))
+		wsDebugPayload("in", w.upstream, w.proto, data)
 		w.rb = data
 	}
 	n := copy(p, w.rb)
@@ -116,6 +117,7 @@ func (w *WSStreamConn) Write(p []byte) (int, error) {
 	}
 	observeWSFrame("out", len(p))
 	observeUpstreamTraffic(w.upstream, w.proto, "out", len(p))
+	wsDebugPayload("out", w.upstream, w.proto, p)
 	return len(p), nil
 }
 
