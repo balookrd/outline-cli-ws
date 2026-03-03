@@ -136,8 +136,19 @@ func newFramedWSConn(s io.ReadWriteCloser) *framedWSConn {
 func (c *framedWSConn) writeRaw(frame []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, err := c.s.Write(frame)
-	return err
+
+	remaining := frame
+	for len(remaining) > 0 {
+		n, err := c.s.Write(remaining)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		remaining = remaining[n:]
+	}
+	return nil
 }
 
 func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) {
