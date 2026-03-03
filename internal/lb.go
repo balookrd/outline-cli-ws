@@ -440,7 +440,10 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
 		pcancel()
 		if perr != nil {
-			err = perr
+			// Keep transport health green when websocket handshake itself is OK.
+			// Quality probes are best-effort and may fail due to target-specific
+			// routing/policy while the proxy remains usable for real traffic.
+			log.Printf("[HC|tcp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
 			rtt = prtt
 		}
@@ -468,7 +471,7 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
 		pcancel()
 		if perr != nil {
-			err = perr
+			log.Printf("[HC|udp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
 			rtt = prtt
 		}
