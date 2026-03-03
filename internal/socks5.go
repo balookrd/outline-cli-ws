@@ -42,6 +42,7 @@ func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 }
 
 func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string) {
+	wsDebugf("socks5 CONNECT requested dst=%q", dst)
 	up, err := s.LB.PickTCP()
 	if err != nil {
 		s.LB.ReportTCPFailure(up, err)
@@ -50,6 +51,7 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	}
 
 	// Open WS stream to upstream TCP endpoint
+	wsDebugf("socks5 CONNECT picked upstream=%q dst=%q", up.cfg.Name, dst)
 	wsc, err := s.LB.AcquireTCPWS(ctx, up)
 	if err != nil {
 		s.LB.ReportTCPFailure(up, err)
@@ -65,6 +67,7 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 
 	// Tunnel: local TCP <-> Shadowsocks-over-WS
 	err = ProxyTCPOverOutlineWS(ctx, c, wsc, up.cfg, dst)
+	wsDebugf("socks5 CONNECT finished upstream=%q dst=%q err=%v", up.cfg.Name, dst, err)
 	if err != nil && !errors.Is(err, io.EOF) {
 		// Do not penalize upstream health on per-flow tunnel errors.
 		// These are often destination/client specific (curl aborts, remote TLS reset,

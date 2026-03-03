@@ -11,6 +11,12 @@ import (
 
 const tcpRelayDrainTimeout = 3 * time.Second
 
+type relayResult struct {
+	dir   string
+	bytes int64
+	err   error
+}
+
 func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up UpstreamConfig, dst string) error {
 	ssconn, err := newSSTCPConn(ctx, wsc, up, dst)
 	if err != nil {
@@ -23,18 +29,21 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	// Important: do not proactively CloseWrite() on one side when the opposite
 	// io.Copy finishes. For WS-backed streams this can translate to full close and
 	// break remaining reverse-direction traffic.
-	errC := make(chan error, 2)
+	errC := make(chan relayResult, 2)
 
+	wsDebugf("tcp relay start upstream=%q dst=%q", up.Name, dst)
 	go func() {
-		_, e := io.Copy(ssconn, client)
-		errC <- e
+		n, e := io.Copy(ssconn, client)
+		errC <- relayResult{dir: "client->upstream", bytes: n, err: e}
 	}()
 	go func() {
-		_, e := io.Copy(client, ssconn)
-		errC <- e
+		n, e := io.Copy(client, ssconn)
+		errC <- relayResult{dir: "upstream->client", bytes: n, err: e}
 	}()
 
-	e1 := <-errC
+	r1 := <-errC
+	wsDebugf("tcp relay side done upstream=%q dst=%q dir=%s bytes=%d err=%v", up.Name, dst, r1.dir, r1.bytes, r1.err)
+	e1 := r1.err
 	if e1 != nil && !errors.Is(e1, io.EOF) {
 		// Hard error: force teardown so the other copy unblocks.
 		_ = ssconn.Close()
@@ -51,10 +60,14 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	default:
 	}
 
+	var r2 relayResult
 	var e2 error
 	select {
-	case e2 = <-errC:
+	case r2 = <-errC:
+		wsDebugf("tcp relay side done upstream=%q dst=%q dir=%s bytes=%d err=%v", up.Name, dst, r2.dir, r2.bytes, r2.err)
+		e2 = r2.err
 	case <-time.After(tcpRelayDrainTimeout):
+		wsDebugf("tcp relay drain timeout upstream=%q dst=%q timeout=%s", up.Name, dst, tcpRelayDrainTimeout)
 		// Keep full-duplex behavior, but avoid leaking half-dead tunnels forever.
 		_ = ssconn.Close()
 		_ = client.Close()
