@@ -23,6 +23,8 @@ type ProbeConfig = internal.ProbeConfig
 
 type TunConfig = internal.TunConfig
 
+type WebSocketConfig = internal.WebSocketConfig
+
 // LoadConfig loads YAML configuration file.
 // Note: internal.LoadConfig returns a pointer.
 func LoadConfig(path string) (*Config, error) { return internal.LoadConfig(path) }
@@ -55,4 +57,9 @@ func EnablePrometheusMetrics() {
 // StartMetricsServer serves /metrics on the provided address until context cancellation.
 func StartMetricsServer(ctx context.Context, addr string) error {
 	return internal.StartMetricsServer(ctx, addr)
+}
+
+// SetWebSocketDebug enables verbose websocket transport diagnostics (h1/h2/h3).
+func SetWebSocketDebug(enabled bool) {
+	internal.SetWebSocketDebug(enabled)
 }

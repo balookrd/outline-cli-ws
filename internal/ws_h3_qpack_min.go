@@ -38,7 +38,7 @@ func h3EncodeHeaders(headers [][2]string) []byte {
 			continue
 		}
 		if idxName >= 0 {
-			b = appendPrefixedInt(b, 0b0100_0000|0b0001_0000, 4, int64(idxName))
+			b = appendPrefixedInt(b, 0b0101_0000, 4, int64(idxName)) // Literal with Name Reference, N=0, T=1 (static)
 			b = appendPrefixedString(b, 0, 7, value)
 			continue
 		}
@@ -74,6 +74,11 @@ func h3DecodeHeaders(block []byte) (map[string]string, error) {
 			e := h3StaticTable[idx]
 			h[e.name] = e.value
 		case b&0b1110_0000 == 0b0100_0000:
+			// Literal with Name Reference: 01 N T xxxx
+			// We only emit/accept static name references (T=1).
+			if b&0b0001_0000 == 0 {
+				return nil, fmt.Errorf("%w: dynamic name reference is unsupported", errH3QPACK)
+			}
 			idx, err := readPrefixedIntWithFirst(r, b, 4)
 			if err != nil {
 				return nil, err

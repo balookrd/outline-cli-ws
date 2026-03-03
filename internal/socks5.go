@@ -66,8 +66,10 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	// Tunnel: local TCP <-> Shadowsocks-over-WS
 	err = ProxyTCPOverOutlineWS(ctx, c, wsc, up.cfg, dst)
 	if err != nil && !errors.Is(err, io.EOF) {
-		s.LB.ReportTCPFailure(up, err)
-		log.Printf("tcp tunnel err: %v", err)
+		// Do not penalize upstream health on per-flow tunnel errors.
+		// These are often destination/client specific (curl aborts, remote TLS reset,
+		// target host policy), while the transport path itself remains healthy.
+		log.Printf("tcp tunnel err (non-health): %v", err)
 	}
 }
 

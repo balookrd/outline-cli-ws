@@ -63,9 +63,6 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	return nil, ErrNotImplemented
 }
 
-// rfc8441Debug is used for verbose logging in ws_h2.go.
-var rfc8441Debug = false
-
 // normalizeHostPort normalizes IPv6 host:port by adding brackets if missing.
 // It is used by config_test.go; the production implementation lives in config.go.
 func normalizeHostPort(s string) string {

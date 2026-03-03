@@ -7,10 +7,13 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,22 +21,36 @@ import (
 )
 
 const (
+	h3HandshakeTimeout             = 12 * time.Second
 	h3FrameData                    = 0x0
 	h3FrameHeaders                 = 0x1
 	h3FrameSettings                = 0x4
 	h3StreamControl                = 0x0
+	h3StreamQpackEncoder           = 0x2
+	h3StreamQpackDecoder           = 0x3
 	h3SettingEnableConnectProtocol = 0x08
 )
 
+type h3ClientStreamProfile uint8
+
+const (
+	h3ClientStreamsControlAndQPACK h3ClientStreamProfile = iota
+	h3ClientStreamsControlOnly
+)
+
 type h3wsStream struct {
-	s  *quic.Stream
-	qc *quic.Conn
-	ep *quic.Endpoint
+	s               *quic.Stream
+	qc              *quic.Conn
+	ep              *quic.Endpoint
+	stopPeerDrainer context.CancelFunc
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
 func (s *h3wsStream) Write(p []byte) (int, error) { return s.s.Write(p) }
 func (s *h3wsStream) Close() error {
+	if s.stopPeerDrainer != nil {
+		s.stopPeerDrainer()
+	}
 	s.s.CloseRead()
 	s.s.CloseWrite()
 	_ = s.qc.Close()
@@ -44,39 +61,107 @@ func (s *h3wsStream) Close() error {
 }
 
 func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
+	profiles := []h3ClientStreamProfile{
+		h3ClientStreamsControlAndQPACK,
+		h3ClientStreamsControlOnly,
+	}
+	var lastErr error
+	for i, profile := range profiles {
+		c, err := dialRFC9220Profile(ctx, u, profile)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		if !strings.Contains(err.Error(), "expected first frame to be a HEADERS frame") {
+			break
+		}
+		if i+1 < len(profiles) {
+			wsDebugf("h3: retrying rfc9220 dial with alternate client stream profile=%d after peer frame-order error", profiles[i+1])
+		}
+	}
+	return nil, lastErr
+}
+
+func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamProfile) (WSConn, error) {
 	if u.Scheme != "wss" && u.Scheme != "https" {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
-	host, port := splitHostPortDefault(u.Host, "443")
-	authority := net.JoinHostPort(host, port)
-	if strings.Contains(u.Host, ":") && strings.HasPrefix(u.Host, "[") {
-		authority = u.Host
+	h3BaseCtx := ctx
+	effectiveH3Timeout := h3HandshakeTimeout
+	if ddl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(ddl); rem > 0 && rem < effectiveH3Timeout {
+			// Some call sites use short per-attempt deadlines (~3s) that are too
+			// aggressive for RFC9220/QUIC handshake and can cause false failures.
+			// Keep context values but ignore the deadline; preserve explicit cancel.
+			h3BaseCtx = context.WithoutCancel(ctx)
+		}
 	}
+	h3ctx, h3cancel := context.WithTimeout(h3BaseCtx, effectiveH3Timeout)
+	defer h3cancel()
+	if h3BaseCtx != ctx {
+		go func(parent context.Context) {
+			<-parent.Done()
+			if !errors.Is(parent.Err(), context.DeadlineExceeded) {
+				h3cancel()
+			}
+		}(ctx)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		host, _ = splitHostPortDefault(u.Host, "443")
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	authority := u.Host
+	if authority == "" {
+		authority = host
+	}
+	dialAddr := net.JoinHostPort(host, port)
+	wsDebugf("h3: prepare dial host=%q port=%q authority=%q dial_addr=%q timeout=%s url=%q", host, port, authority, dialAddr, effectiveH3Timeout, u.Redacted())
 
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: host, NextProtos: []string{"h3"}}
 	qcConf := &quic.Config{TLSConfig: tlsConf}
+	if wsDebugEnabled.Load() {
+		qcConf.QLogLogger = slog.New(&h3QlogDebugHandler{})
+		wsDebugf("h3: qlog packet tracing enabled (first %d sent/recv packets)", h3QlogFirstPackets)
+	}
 	ep, err := quic.Listen("udp", ":0", qcConf)
 	if err != nil {
+		wsDebugf("h3: quic listen failed err=%v", err)
 		return nil, err
 	}
-	qconn, err := ep.Dial(ctx, "udp", authority, qcConf)
+	wsDebugf("h3: quic endpoint ready, dialing addr=%q", dialAddr)
+	qconn, err := ep.Dial(h3ctx, "udp", dialAddr, qcConf)
 	if err != nil {
+		wsDebugf("h3: quic dial failed addr=%q err=%v", dialAddr, err)
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
+	wsDebugf("h3: quic dial established addr=%q", dialAddr)
+	peerDrainCancel := startH3PeerStreamDrainer(qconn)
+	h3Established := false
+	defer func() {
+		if h3Established {
+			return
+		}
+		peerDrainCancel()
+	}()
 
-	if err := h3SendClientSettings(ctx, qconn); err != nil {
-		_ = qconn.Close()
-		_ = ep.Close(context.Background())
+	if err := h3OpenClientUniStreams(h3ctx, qconn, profile); err != nil {
+		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: client streams initialized profile=%d", profile)
 
-	st, err := qconn.NewStream(ctx)
+	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
-		_ = qconn.Close()
-		_ = ep.Close(context.Background())
+		wsDebugf("h3: open request stream failed err=%v", err)
 		return nil, err
 	}
+	wsDebugf("h3: request stream opened")
 
 	key, accept, err := h3WebSocketKeyAccept()
 	if err != nil {
@@ -86,49 +171,162 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if origin := u.Query().Get("origin"); origin != "" {
 		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
 	}
-	if _, err := st.Write(appendVarint(nil, h3FrameHeaders)); err != nil {
+	requestFrame := appendVarint(nil, h3FrameHeaders)
+	requestFrame = appendVarint(requestFrame, uint64(len(headers)))
+	requestFrame = append(requestFrame, headers...)
+	wsDebugf("h3: writing HEADERS frame total_len=%d (field_section_len=%d)", len(requestFrame), len(headers))
+	if err := h3WriteWithContext(h3ctx, st, requestFrame); err != nil {
+		wsDebugf("h3: write HEADERS frame failed err=%v", err)
 		return nil, err
 	}
-	if _, err := st.Write(appendVarint(nil, uint64(len(headers)))); err != nil {
-		return nil, err
-	}
-	if _, err := st.Write(headers); err != nil {
-		return nil, err
-	}
+	// x/net/quic may buffer stream data until scheduler tick; force flushing the
+	// CONNECT request headers so the server can respond promptly.
+	_ = st.Flush()
+	wsDebugf("h3: request headers sent, flushed, waiting response")
+	// IMPORTANT: do NOT close the client request stream here.
+	//
+	// RFC 9220 upgrades this very stream into a bidirectional WebSocket data
+	// channel after successful CONNECT response headers. Closing write-side at
+	// handshake time makes the resulting tunnel half-closed and breaks any
+	// client->upstream traffic (seen with QUIC proxy backends).
+	handshakeStarted := time.Now()
 
-	resp, err := h3ReadResponseHeaders(st)
-	if err != nil {
+	respCh := make(chan map[string]string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		resp, err := h3ReadResponseHeaders(st)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		respCh <- resp
+	}()
+
+	var resp map[string]string
+	select {
+	case <-h3ctx.Done():
+		elapsed := time.Since(handshakeStarted)
+		wsDebugf("h3: timeout/cancel while waiting response after %s (authority=%q path=%q err=%v)", elapsed, authority, cleanedRequestURI(u), h3ctx.Err())
+		_ = qconn.Close()
+		_ = ep.Close(context.Background())
+		if errors.Is(h3ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("rfc9220 handshake timeout waiting response headers after %s", elapsed)
+		}
+		return nil, h3ctx.Err()
+	case err := <-errCh:
+		wsDebugf("h3: read response headers failed err=%v", err)
 		return nil, err
+	case resp = <-respCh:
 	}
+	wsDebugf("h3: response status=%q headers=%s", resp[":status"], h3FormatHeaders(resp))
 	if resp[":status"] != "200" {
-		return nil, fmt.Errorf("rfc9220 connect failed: status=%s", resp[":status"])
+		return nil, fmt.Errorf("rfc9220 connect failed: status=%s headers=%s", resp[":status"], h3FormatHeaders(resp))
 	}
 	if got := resp["sec-websocket-accept"]; got != "" && got != accept {
+		wsDebugf("h3: bad sec-websocket-accept got=%q", got)
 		return nil, fmt.Errorf("rfc9220 bad sec-websocket-accept")
 	}
-	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep}), nil
+	wsDebugf("h3: websocket CONNECT established")
+	h3Established = true
+	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
 }
 
-func h3SendClientSettings(ctx context.Context, c *quic.Conn) error {
+func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			st, err := c.AcceptStream(ctx)
+			if err != nil {
+				return
+			}
+			go func(s *quic.Stream) {
+				// peer-initiated uni streams будут read-only
+				defer s.CloseRead()
+
+				if s.IsReadOnly() {
+					// H3 uni stream начинается с varint stream type (0=control,2,3=qpack)
+					typ, err := readVarint(s)
+					if err == nil {
+						wsDebugf("h3: peer stream accepted type=%d", typ)
+					}
+				} else {
+					wsDebugf("h3: peer bidi stream accepted")
+				}
+
+				_, _ = io.Copy(io.Discard, s)
+			}(st)
+		}
+	}()
+	return cancel
+}
+
+func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, profile h3ClientStreamProfile) error {
+	// 1) Control stream + SETTINGS_ENABLE_CONNECT_PROTOCOL.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
 		return err
 	}
 	payload := appendVarint(nil, h3SettingEnableConnectProtocol)
 	payload = appendVarint(payload, 1)
-	if _, err := st.Write(appendVarint(nil, h3StreamControl)); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, h3StreamControl)); err != nil {
 		return err
 	}
-	if _, err := st.Write(appendVarint(nil, h3FrameSettings)); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, h3FrameSettings)); err != nil {
 		return err
 	}
-	if _, err := st.Write(appendVarint(nil, uint64(len(payload)))); err != nil {
+	if err := h3WriteWithContext(ctx, st, appendVarint(nil, uint64(len(payload)))); err != nil {
 		return err
 	}
-	if _, err := st.Write(payload); err != nil {
+	if err := h3WriteWithContext(ctx, st, payload); err != nil {
 		return err
 	}
-	st.CloseWrite()
+	_ = st.Flush()
+
+	if profile == h3ClientStreamsControlOnly {
+		return nil
+	}
+
+	// 2) Some strict H3 stacks expect client QPACK uni streams to be present
+	// before processing request streams. Open both streams and send only the
+	// stream-type varint (no encoder instructions).
+	qenc, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qenc, appendVarint(nil, h3StreamQpackEncoder)); err != nil {
+		return err
+	}
+	_ = qenc.Flush()
+
+	qdec, err := c.NewSendOnlyStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h3WriteWithContext(ctx, qdec, appendVarint(nil, h3StreamQpackDecoder)); err != nil {
+		return err
+	}
+	_ = qdec.Flush()
+	return nil
+}
+
+func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
+	remaining := b
+	for len(remaining) > 0 {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("h3 write timeout")
+			}
+			return err
+		}
+		n, err := st.Write(remaining)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		remaining = remaining[n:]
+	}
 	return nil
 }
 
@@ -150,6 +348,26 @@ func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
 			return h3DecodeHeaders(buf)
 		}
 	}
+}
+
+func h3FormatHeaders(h map[string]string) string {
+	if len(h) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := h[k]
+		if len(v) > 128 {
+			v = v[:128] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", k, v))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
 }
 
 func splitHostPortDefault(hostport, defPort string) (string, string) {

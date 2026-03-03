@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -137,8 +136,19 @@ func newFramedWSConn(s io.ReadWriteCloser) *framedWSConn {
 func (c *framedWSConn) writeRaw(frame []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, err := c.s.Write(frame)
-	return err
+
+	remaining := frame
+	for len(remaining) > 0 {
+		n, err := c.s.Write(remaining)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		remaining = remaining[n:]
+	}
+	return nil
 }
 
 func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) {
@@ -164,15 +174,6 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 		case WSMessageClose:
 			// Echo close (best-effort) and stop.
 			// If peer sent a close code/reason, preserve it.
-			if rfc8441Debug {
-				code := WSStatusCode(0)
-				reason := ""
-				if len(payload) >= 2 {
-					code = WSStatusCode(binary.BigEndian.Uint16(payload[:2]))
-					reason = string(payload[2:])
-				}
-				log.Printf("[WS] recv close code=%d reason=%q", code, reason)
-			}
 			// Send back the same payload.
 			if frame, err := buildFrame(WSMessageClose, payload, true /* mask */); err == nil {
 				_ = c.writeRaw(frame)
@@ -181,9 +182,6 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 			return 0, nil, io.EOF
 		case WSMessageContinuation:
 			// Continuation without an active message is a protocol error.
-			if rfc8441Debug {
-				log.Printf("[WS] protocol error: unexpected continuation")
-			}
 			return 0, nil, fmt.Errorf("websocket protocol error: unexpected continuation frame")
 		default:
 			if fin {
@@ -215,9 +213,6 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 					}
 				default:
 					// Interleaved data frames during fragmentation are invalid.
-					if rfc8441Debug {
-						log.Printf("[WS] protocol error: expected continuation, got opcode=%d", op2)
-					}
 					return 0, nil, fmt.Errorf("websocket protocol error: expected continuation, got opcode=%d", op2)
 				}
 			}

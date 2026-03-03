@@ -16,6 +16,7 @@ type Config struct {
 		SOCKS5 string `yaml:"socks5"`
 	} `yaml:"listen"`
 	Tun         TunConfig         `yaml:"tun"`
+	WebSocket   WebSocketConfig   `yaml:"websocket"`
 	Healthcheck HealthcheckConfig `yaml:"healthcheck"`
 	Selection   SelectionConfig   `yaml:"selection"`
 	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
@@ -34,6 +35,10 @@ type TunConfig struct {
 	UDPGCInterval      time.Duration `yaml:"udp_gc_interval"`       // e.g. 10s
 	UDPFlowIdleTimeout time.Duration `yaml:"udp_flow_idle_timeout"` // idle dst-subscription внутри port-session
 	UDPMaxDstPerPort   int           `yaml:"udp_max_dst_per_port"`
+}
+
+type WebSocketConfig struct {
+	Debug bool `yaml:"debug"` // verbose WebSocket transport diagnostics (h1/h2/h3/quic handshake path)
 }
 
 type HealthcheckConfig struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -412,8 +413,25 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	}
 }
 
+const h3HealthcheckMinTimeout = 8 * time.Second
+
+func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return base
+	}
+	_, _, tryH3, h3Only := parseTransportHints(u.Query())
+	if (tryH3 || h3Only) && base < h3HealthcheckMinTimeout {
+		return h3HealthcheckMinTimeout
+	}
+	return base
+}
+
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS))
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
@@ -422,7 +440,10 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
 		pcancel()
 		if perr != nil {
-			err = perr
+			// Keep transport health green when websocket handshake itself is OK.
+			// Quality probes are best-effort and may fail due to target-specific
+			// routing/policy while the proxy remains usable for real traffic.
+			log.Printf("[HC|tcp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
 			rtt = prtt
 		}
@@ -441,7 +462,7 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 }
 
 func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
-	cctx, cancel := context.WithTimeout(parent, lb.hc.Timeout)
+	cctx, cancel := context.WithTimeout(parent, wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS))
 	defer cancel()
 
 	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
@@ -450,7 +471,7 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
 		pcancel()
 		if perr != nil {
-			err = perr
+			log.Printf("[HC|udp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
 			rtt = prtt
 		}

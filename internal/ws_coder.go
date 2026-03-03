@@ -53,9 +53,17 @@ func dialCoderWebSocket(ctx context.Context, rawurl string, tr *http.Transport) 
 			Transport: tr,
 		},
 	}
-	conn, _, err := websocket.Dial(ctx, rawurl, opts)
+	conn, resp, err := websocket.Dial(ctx, rawurl, opts)
 	if err != nil {
+		if resp != nil {
+			wsDebugf("h1: websocket dial failed url=%q status=%q err=%v", rawurl, resp.Status, err)
+		} else {
+			wsDebugf("h1: websocket dial failed url=%q err=%v", rawurl, err)
+		}
 		return nil, err
+	}
+	if resp != nil {
+		wsDebugf("h1: websocket dial response status=%q", resp.Status)
 	}
 	return &coderConn{c: conn}, nil
 }
