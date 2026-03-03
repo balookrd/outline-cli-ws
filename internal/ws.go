@@ -167,6 +167,9 @@ func ProbeWSS(ctx context.Context, rawurl string, fwmark uint32) (time.Duration,
 	if err != nil {
 		return 0, err
 	}
+	elapsed := time.Since(start)
+	wsDebugf("probe: transport established url=%q elapsed=%s, closing intentionally", rawurl, elapsed)
 	_ = c.Close(WSStatusNormalClosure, "probe")
-	return time.Since(start), nil
+	wsDebugf("probe: close sent url=%q", rawurl)
+	return elapsed, nil
 }

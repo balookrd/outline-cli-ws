@@ -36,6 +36,7 @@ func (w *WSPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		n := copy(p, data)
 		observeWSFrame("in", n)
 		observeUpstreamTraffic(w.upstream, w.proto, "in", n)
+		wsDebugPayload("in", w.upstream, w.proto, data[:n])
 		return n, dummyAddr{}, nil
 	}
 }
@@ -46,6 +47,7 @@ func (w *WSPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	}
 	observeWSFrame("out", len(p))
 	observeUpstreamTraffic(w.upstream, w.proto, "out", len(p))
+	wsDebugPayload("out", w.upstream, w.proto, p)
 	return len(p), nil
 }
 
