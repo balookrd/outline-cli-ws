@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const tcpRelayDrainTimeout = 3 * time.Second
+
 func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up UpstreamConfig, dst string) error {
 	ssconn, err := newSSTCPConn(ctx, wsc, up, dst)
 	if err != nil {
@@ -49,7 +51,18 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	default:
 	}
 
-	e2 := <-errC
+	var e2 error
+	select {
+	case e2 = <-errC:
+	case <-time.After(tcpRelayDrainTimeout):
+		// Keep full-duplex behavior, but avoid leaking half-dead tunnels forever.
+		_ = ssconn.Close()
+		_ = client.Close()
+		if e1 != nil && !errors.Is(e1, io.EOF) {
+			return e1
+		}
+		return nil
+	}
 
 	if e1 != nil && !errors.Is(e1, io.EOF) {
 		return e1
