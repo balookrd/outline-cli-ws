@@ -142,20 +142,12 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	if origin := u.Query().Get("origin"); origin != "" {
 		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
 	}
-	wsDebugf("h3: writing HEADERS frame type")
-	if err := h3WriteWithContext(h3ctx, st, appendVarint(nil, h3FrameHeaders)); err != nil {
-		wsDebugf("h3: write frame type failed err=%v", err)
-		return nil, err
-	}
-	wsDebugf("h3: HEADERS frame type written")
-	wsDebugf("h3: writing HEADERS length=%d", len(headers))
-	if err := h3WriteWithContext(h3ctx, st, appendVarint(nil, uint64(len(headers)))); err != nil {
-		wsDebugf("h3: write headers length failed err=%v", err)
-		return nil, err
-	}
-	wsDebugf("h3: writing HEADERS payload")
-	if err := h3WriteWithContext(h3ctx, st, headers); err != nil {
-		wsDebugf("h3: write headers payload failed err=%v", err)
+	requestFrame := appendVarint(nil, h3FrameHeaders)
+	requestFrame = appendVarint(requestFrame, uint64(len(headers)))
+	requestFrame = append(requestFrame, headers...)
+	wsDebugf("h3: writing HEADERS frame total_len=%d (field_section_len=%d)", len(requestFrame), len(headers))
+	if err := h3WriteWithContext(h3ctx, st, requestFrame); err != nil {
+		wsDebugf("h3: write HEADERS frame failed err=%v", err)
 		return nil, err
 	}
 	// x/net/quic may buffer stream data until scheduler tick; force flushing the
