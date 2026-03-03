@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	h3HandshakeTimeout             = 12 * time.Second
 	h3FrameData                    = 0x0
 	h3FrameHeaders                 = 0x1
 	h3FrameSettings                = 0x4
