@@ -31,6 +31,14 @@ const (
 	h3SettingEnableConnectProtocol = 0x08
 )
 
+type h3ClientStreamProfile uint8
+
+const (
+	h3ClientStreamsControlAndQPACK h3ClientStreamProfile = iota
+	h3ClientStreamsControlOnly
+	h3ClientStreamsBare
+)
+
 type h3wsStream struct {
 	s               *quic.Stream
 	qc              *quic.Conn
@@ -54,18 +62,29 @@ func (s *h3wsStream) Close() error {
 }
 
 func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
-	c, err := dialRFC9220Profile(ctx, u, true)
-	if err == nil {
-		return c, nil
+	profiles := []h3ClientStreamProfile{
+		h3ClientStreamsControlAndQPACK,
+		h3ClientStreamsControlOnly,
+		h3ClientStreamsBare,
 	}
-	if strings.Contains(err.Error(), "expected first frame to be a HEADERS frame") {
-		wsDebugf("h3: retrying rfc9220 dial without client qpack streams after peer frame-order error")
-		return dialRFC9220Profile(ctx, u, false)
+	var lastErr error
+	for i, profile := range profiles {
+		c, err := dialRFC9220Profile(ctx, u, profile)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		if !strings.Contains(err.Error(), "expected first frame to be a HEADERS frame") {
+			break
+		}
+		if i+1 < len(profiles) {
+			wsDebugf("h3: retrying rfc9220 dial with alternate client stream profile=%d after peer frame-order error", profiles[i+1])
+		}
 	}
-	return nil, err
+	return nil, lastErr
 }
 
-func dialRFC9220Profile(ctx context.Context, u *url.URL, openQPACK bool) (WSConn, error) {
+func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamProfile) (WSConn, error) {
 	if u.Scheme != "wss" && u.Scheme != "https" {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
@@ -133,11 +152,11 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, openQPACK bool) (WSConn
 		peerDrainCancel()
 	}()
 
-	if err := h3OpenClientUniStreams(h3ctx, qconn, openQPACK); err != nil {
+	if err := h3OpenClientUniStreams(h3ctx, qconn, profile); err != nil {
 		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: client control streams opened (qpack=%v)", openQPACK)
+	wsDebugf("h3: client streams initialized profile=%d", profile)
 
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
@@ -255,7 +274,11 @@ func drainH3PeerStream(st *quic.Stream) {
 	_, _ = io.Copy(io.Discard, st)
 }
 
-func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, openQPACK bool) error {
+func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, profile h3ClientStreamProfile) error {
+	if profile == h3ClientStreamsBare {
+		return nil
+	}
+
 	// 1) Control stream + SETTINGS_ENABLE_CONNECT_PROTOCOL.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
@@ -277,7 +300,7 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, openQPACK bool) e
 	}
 	_ = st.Flush()
 
-	if !openQPACK {
+	if profile == h3ClientStreamsControlOnly {
 		return nil
 	}
 
