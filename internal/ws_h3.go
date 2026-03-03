@@ -54,6 +54,18 @@ func (s *h3wsStream) Close() error {
 }
 
 func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
+	c, err := dialRFC9220Profile(ctx, u, true)
+	if err == nil {
+		return c, nil
+	}
+	if strings.Contains(err.Error(), "expected first frame to be a HEADERS frame") {
+		wsDebugf("h3: retrying rfc9220 dial without client qpack streams after peer frame-order error")
+		return dialRFC9220Profile(ctx, u, false)
+	}
+	return nil, err
+}
+
+func dialRFC9220Profile(ctx context.Context, u *url.URL, openQPACK bool) (WSConn, error) {
 	if u.Scheme != "wss" && u.Scheme != "https" {
 		return nil, fmt.Errorf("rfc9220 requires wss/https, got %q", u.Scheme)
 	}
@@ -121,11 +133,11 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 		peerDrainCancel()
 	}()
 
-	if err := h3OpenClientUniStreams(h3ctx, qconn); err != nil {
+	if err := h3OpenClientUniStreams(h3ctx, qconn, openQPACK); err != nil {
 		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: client control/qpack streams opened")
+	wsDebugf("h3: client control streams opened (qpack=%v)", openQPACK)
 
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
@@ -243,7 +255,7 @@ func drainH3PeerStream(st *quic.Stream) {
 	_, _ = io.Copy(io.Discard, st)
 }
 
-func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
+func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, openQPACK bool) error {
 	// 1) Control stream + SETTINGS_ENABLE_CONNECT_PROTOCOL.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
@@ -264,6 +276,10 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn) error {
 		return err
 	}
 	_ = st.Flush()
+
+	if !openQPACK {
+		return nil
+	}
 
 	// 2) Some strict H3 stacks expect client QPACK uni streams to be present
 	// before processing request streams. Open both streams and send only the
