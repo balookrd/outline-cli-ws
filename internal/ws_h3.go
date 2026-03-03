@@ -330,8 +330,20 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, profile h3ClientS
 func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := st.Write(b)
-		errCh <- err
+		remaining := b
+		for len(remaining) > 0 {
+			n, err := st.Write(remaining)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if n <= 0 {
+				errCh <- io.ErrShortWrite
+				return
+			}
+			remaining = remaining[n:]
+		}
+		errCh <- nil
 	}()
 
 	select {
