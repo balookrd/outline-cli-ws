@@ -322,34 +322,24 @@ func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, profile h3ClientS
 }
 
 func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
-	errCh := make(chan error, 1)
-	go func() {
-		remaining := b
-		for len(remaining) > 0 {
-			n, err := st.Write(remaining)
-			if err != nil {
-				errCh <- err
-				return
+	remaining := b
+	for len(remaining) > 0 {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("h3 write timeout")
 			}
-			if n <= 0 {
-				errCh <- io.ErrShortWrite
-				return
-			}
-			remaining = remaining[n:]
+			return err
 		}
-		errCh <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		st.CloseWrite()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("h3 write timeout")
+		n, err := st.Write(remaining)
+		if err != nil {
+			return err
 		}
-		return ctx.Err()
-	case err := <-errCh:
-		return err
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		remaining = remaining[n:]
 	}
+	return nil
 }
 
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
