@@ -36,7 +36,6 @@ type h3ClientStreamProfile uint8
 const (
 	h3ClientStreamsControlAndQPACK h3ClientStreamProfile = iota
 	h3ClientStreamsControlOnly
-	h3ClientStreamsBare
 )
 
 type h3wsStream struct {
@@ -65,7 +64,6 @@ func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
 	profiles := []h3ClientStreamProfile{
 		h3ClientStreamsControlAndQPACK,
 		h3ClientStreamsControlOnly,
-		h3ClientStreamsBare,
 	}
 	var lastErr error
 	for i, profile := range profiles {
@@ -275,10 +273,6 @@ func drainH3PeerStream(st *quic.Stream) {
 }
 
 func h3OpenClientUniStreams(ctx context.Context, c *quic.Conn, profile h3ClientStreamProfile) error {
-	if profile == h3ClientStreamsBare {
-		return nil
-	}
-
 	// 1) Control stream + SETTINGS_ENABLE_CONNECT_PROTOCOL.
 	st, err := c.NewSendOnlyStream(ctx)
 	if err != nil {
