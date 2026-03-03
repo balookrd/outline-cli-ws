@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -15,55 +16,48 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	}
 	defer ssconn.Close()
 
-	// Bi-directional copy.
-	// We wait for *both* directions to finish, but we also MUST actively
-	// propagate half-close/close signals, otherwise one io.Copy may block forever
-	// (typical when the client aborts: client->server stops, server->client keeps
-	// waiting).
+	// Full-duplex relay.
+	//
+	// Important: do not proactively CloseWrite() on one side when the opposite
+	// io.Copy finishes. For WS-backed streams this can translate to full close and
+	// break remaining reverse-direction traffic.
 	errC := make(chan error, 2)
 
 	go func() {
 		_, e := io.Copy(ssconn, client)
-		// Client->server finished: tell upstream we won't send more.
-		_ = closeWrite(ssconn)
 		errC <- e
 	}()
 	go func() {
 		_, e := io.Copy(client, ssconn)
-		// Server->client finished: tell client we won't send more.
-		_ = closeWrite(client)
 		errC <- e
 	}()
 
-	firstErr := <-errC
+	e1 := <-errC
+	if e1 != nil && !errors.Is(e1, io.EOF) {
+		// Hard error: force teardown so the other copy unblocks.
+		_ = ssconn.Close()
+		_ = client.Close()
+	}
 
-	// Ensure both sides are unblocked.
-	// For WebSocket streams, CloseWrite == Close.
-	_ = ssconn.Close()
-	_ = client.Close()
-
-	// If the caller already canceled, don't wait.
+	// If caller canceled, return early (cleanup via deferred closes).
 	select {
 	case <-ctx.Done():
-		return firstErr
+		if e1 != nil && !errors.Is(e1, io.EOF) {
+			return e1
+		}
+		return ctx.Err()
 	default:
 	}
 
-	secondErr := <-errC
-	if firstErr != nil {
-		return firstErr
-	}
-	return secondErr
-}
+	e2 := <-errC
 
-// closeWrite attempts a TCP half-close if supported, otherwise falls back to Close.
-func closeWrite(c net.Conn) error {
-	// net.TCPConn has CloseWrite.
-	type closeWriter interface{ CloseWrite() error }
-	if cw, ok := c.(closeWriter); ok {
-		return cw.CloseWrite()
+	if e1 != nil && !errors.Is(e1, io.EOF) {
+		return e1
 	}
-	return c.Close()
+	if e2 != nil && !errors.Is(e2, io.EOF) {
+		return e2
+	}
+	return nil
 }
 
 // ---- WS stream as net.Conn ----
@@ -123,11 +117,6 @@ func (w *WSStreamConn) Close() error {
 	})
 	return nil
 }
-
-// CloseWrite is a best-effort half-close signal.
-// WebSocket doesn't support true TCP half-close, so we translate it to a normal
-// close handshake.
-func (w *WSStreamConn) CloseWrite() error { return w.Close() }
 
 func (w *WSStreamConn) LocalAddr() net.Addr  { return dummyTCPAddr("local") }
 func (w *WSStreamConn) RemoteAddr() net.Addr { return dummyTCPAddr("remote") }
