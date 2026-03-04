@@ -130,10 +130,10 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		wsDebugf("h3: quic listen failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: quic endpoint ready, dialing addr=%q", dialAddr)
+	wsDebugf("h3: quic endpoint ready, dialing addr=%q sni=%q alpn=%v", dialAddr, tlsConf.ServerName, tlsConf.NextProtos)
 	qconn, err := ep.Dial(h3ctx, "udp", dialAddr, qcConf)
 	if err != nil {
-		wsDebugf("h3: quic dial failed addr=%q err=%v", dialAddr, err)
+		wsDebugf("h3: quic dial failed addr=%q err=%s", dialAddr, h3DescribeErr(err))
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: client streams initialized profile=%d", profile)
+	wsDebugf("h3: client streams initialized profile=%d (%s)", profile, h3ProfileName(profile))
 
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
@@ -164,6 +164,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	requestFrame := appendVarint(nil, h3FrameHeaders)
 	requestFrame = appendVarint(requestFrame, uint64(len(headers)))
 	requestFrame = append(requestFrame, headers...)
+	wsDebugf("h3: request CONNECT headers=%s", h3FormatHeaders(h3ConnectHeaderMap(u, authority)))
 	wsDebugf("h3: writing HEADERS frame total_len=%d (field_section_len=%d)", len(requestFrame), len(headers))
 	if err := h3WriteWithContext(h3ctx, st, requestFrame); err != nil {
 		wsDebugf("h3: write HEADERS frame failed err=%v", err)
@@ -204,7 +205,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
-		wsDebugf("h3: read response headers failed err=%v", err)
+		wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
 		return nil, err
 	case resp = <-respCh:
 	}
@@ -320,14 +321,29 @@ func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
 }
 
 func h3ConnectHeaders(u *url.URL, authority string) []byte {
+	fields := h3ConnectHeaderFields(u, authority)
+	return h3EncodeHeaders(fields)
+}
+
+func h3ConnectHeaderMap(u *url.URL, authority string) map[string]string {
+	out := map[string]string{}
+	for _, f := range h3ConnectHeaderFields(u, authority) {
+		out[f[0]] = f[1]
+	}
+	return out
+}
+
+func h3ConnectHeaderFields(u *url.URL, authority string) [][2]string {
 	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}}
 	if origin := u.Query().Get("origin"); origin != "" {
 		fields = append(fields, [2]string{"origin", origin})
 	}
-	return h3EncodeHeaders(fields)
+	return fields
 }
 
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
+	const maxLoggedNonHeadersFrames = 8
+	nonHeaders := 0
 	for {
 		ft, err := readVarint(r)
 		if err != nil {
@@ -344,7 +360,33 @@ func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
 		if ft == h3FrameHeaders {
 			return h3DecodeHeaders(buf)
 		}
+		nonHeaders++
+		if nonHeaders <= maxLoggedNonHeadersFrames {
+			wsDebugf("h3: pre-response frame #%d type=%d len=%d (waiting for HEADERS)", nonHeaders, ft, n)
+		}
 	}
+}
+
+func h3ProfileName(p h3ClientStreamProfile) string {
+	switch p {
+	case h3ClientStreamsControlAndQPACK:
+		return "control+qpack"
+	case h3ClientStreamsControlOnly:
+		return "control-only"
+	default:
+		return "unknown"
+	}
+}
+
+func h3DescribeErr(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	parts := []string{fmt.Sprintf("%T: %v", err, err)}
+	for u := errors.Unwrap(err); u != nil; u = errors.Unwrap(u) {
+		parts = append(parts, fmt.Sprintf("%T: %v", u, u))
+	}
+	return strings.Join(parts, " | cause: ")
 }
 
 func h3FormatHeaders(h map[string]string) string {
