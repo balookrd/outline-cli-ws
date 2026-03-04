@@ -64,19 +64,49 @@ type h3PeerObservations struct {
 	mu                    sync.RWMutex
 	sawSettings           bool
 	enableConnectProtocol bool
+	settingsSeen          chan struct{}
+}
+
+func newH3PeerObservations() *h3PeerObservations {
+	return &h3PeerObservations{settingsSeen: make(chan struct{})}
 }
 
 func (o *h3PeerObservations) setSettings(enableConnectProtocol bool) {
 	o.mu.Lock()
+	alreadySaw := o.sawSettings
 	o.sawSettings = true
 	o.enableConnectProtocol = enableConnectProtocol
+	ch := o.settingsSeen
 	o.mu.Unlock()
+	if !alreadySaw && ch != nil {
+		close(ch)
+	}
 }
 
 func (o *h3PeerObservations) snapshot() (sawSettings bool, enableConnectProtocol bool) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.sawSettings, o.enableConnectProtocol
+}
+
+func (o *h3PeerObservations) waitSettings(timeout time.Duration) {
+	if o == nil || timeout <= 0 {
+		return
+	}
+	o.mu.RLock()
+	if o.sawSettings {
+		o.mu.RUnlock()
+		return
+	}
+	ch := o.settingsSeen
+	o.mu.RUnlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+	}
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
@@ -175,7 +205,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		return nil, err
 	}
 	wsDebugf("h3: quic dial established addr=%q", dialAddr)
-	obs := &h3PeerObservations{}
+	obs := newH3PeerObservations()
 	peerDrainCancel := startH3PeerStreamDrainer(qconn, obs)
 	h3Established := false
 	defer func() {
@@ -509,19 +539,25 @@ func h3PeerSupportHint(err error, obs *h3PeerObservations) string {
 	if obs == nil {
 		return ""
 	}
-	saw, enable := obs.snapshot()
-	if !saw {
-		return ""
-	}
-	if enable {
-		return ""
-	}
+	isMessageErr := false
 	for u := err; u != nil; u = errors.Unwrap(u) {
 		if sc, ok := u.(quic.StreamErrorCode); ok && uint64(sc) == h3ErrorMessage {
-			return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1; RFC9220 Extended CONNECT likely unsupported on this H3 endpoint/proxy"
+			isMessageErr = true
+			break
 		}
 	}
-	return ""
+	if !isMessageErr {
+		return ""
+	}
+	// Control stream SETTINGS can arrive slightly after request stream reset.
+	// Give the drainer a short chance to observe peer capabilities before
+	// deciding whether to emit the unsupported-RFC9220 hint.
+	obs.waitSettings(150 * time.Millisecond)
+	saw, enable := obs.snapshot()
+	if !saw || enable {
+		return ""
+	}
+	return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1; RFC9220 Extended CONNECT likely unsupported on this H3 endpoint/proxy"
 }
 
 func h3ErrorName(code uint64) string {

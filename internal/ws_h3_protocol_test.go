@@ -153,3 +153,16 @@ func TestH3PeerSupportHint_WhenMissingEnableConnectProtocol(t *testing.T) {
 		t.Fatalf("expected support hint for H3_MESSAGE_ERROR with missing ENABLE_CONNECT_PROTOCOL")
 	}
 }
+
+func TestH3PeerSupportHint_WaitsForLateSettingsObservation(t *testing.T) {
+	obs := newH3PeerObservations()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		obs.setSettings(false)
+	}()
+
+	hint := h3PeerSupportHint(fmt.Errorf("wrap: %w", quic.StreamErrorCode(h3ErrorMessage)), obs)
+	if hint == "" {
+		t.Fatalf("expected support hint after delayed SETTINGS observation")
+	}
+}
