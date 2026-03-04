@@ -26,6 +26,23 @@ const (
 	h3StreamQpackEncoder           = 0x2
 	h3StreamQpackDecoder           = 0x3
 	h3SettingEnableConnectProtocol = 0x08
+	h3ErrorNoError                 = 0x100
+	h3ErrorGeneralProtocol         = 0x101
+	h3ErrorInternal                = 0x102
+	h3ErrorStreamCreation          = 0x103
+	h3ErrorClosedCriticalStream    = 0x104
+	h3ErrorFrameUnexpected         = 0x105
+	h3ErrorFrame                   = 0x106
+	h3ErrorExcessiveLoad           = 0x107
+	h3ErrorID                      = 0x108
+	h3ErrorSettings                = 0x109
+	h3ErrorMissingSettings         = 0x10a
+	h3ErrorRequestRejected         = 0x10b
+	h3ErrorRequestCancelled        = 0x10c
+	h3ErrorRequestIncomplete       = 0x10d
+	h3ErrorMessage                 = 0x10e
+	h3ErrorConnect                 = 0x10f
+	h3ErrorVersionFallback         = 0x110
 )
 
 type h3ClientStreamProfile uint8
@@ -238,6 +255,10 @@ func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
 					typ, err := readVarint(s)
 					if err == nil {
 						wsDebugf("h3: peer stream accepted type=%d", typ)
+						if typ == h3StreamControl {
+							h3LogPeerControlStream(s)
+							return
+						}
 					}
 				} else {
 					wsDebugf("h3: peer bidi stream accepted")
@@ -385,8 +406,109 @@ func h3DescribeErr(err error) string {
 	parts := []string{fmt.Sprintf("%T: %v", err, err)}
 	for u := errors.Unwrap(err); u != nil; u = errors.Unwrap(u) {
 		parts = append(parts, fmt.Sprintf("%T: %v", u, u))
+		if sc, ok := u.(quic.StreamErrorCode); ok {
+			parts = append(parts, fmt.Sprintf("quic.StreamErrorCode=0x%x (%s)", uint64(sc), h3ErrorName(uint64(sc))))
+		}
 	}
 	return strings.Join(parts, " | cause: ")
+}
+
+func h3LogPeerControlStream(r io.Reader) {
+	const maxControlFramesToLog = 8
+	for i := 0; i < maxControlFramesToLog; i++ {
+		ft, err := readVarint(r)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				wsDebugf("h3: peer control stream read end err=%s", h3DescribeErr(err))
+			}
+			return
+		}
+		n, err := readVarint(r)
+		if err != nil {
+			wsDebugf("h3: peer control stream read frame length failed err=%s", h3DescribeErr(err))
+			return
+		}
+		payload := make([]byte, n)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			wsDebugf("h3: peer control stream read frame payload failed type=%d len=%d err=%s", ft, n, h3DescribeErr(err))
+			return
+		}
+		if ft == h3FrameSettings {
+			wsDebugf("h3: peer SETTINGS %s", h3FormatSettingsPayload(payload))
+			continue
+		}
+		wsDebugf("h3: peer control frame type=%d len=%d", ft, n)
+	}
+}
+
+func h3FormatSettingsPayload(payload []byte) string {
+	if len(payload) == 0 {
+		return "{}"
+	}
+	out := map[string]string{}
+	r := strings.NewReader(string(payload))
+	idx := 0
+	for r.Len() > 0 && idx < 32 {
+		id, err := readVarint(r)
+		if err != nil {
+			break
+		}
+		val, err := readVarint(r)
+		if err != nil {
+			break
+		}
+		name := fmt.Sprintf("0x%x", id)
+		if id == h3SettingEnableConnectProtocol {
+			name = "ENABLE_CONNECT_PROTOCOL(0x8)"
+		}
+		out[name] = fmt.Sprintf("%d", val)
+		idx++
+	}
+	if len(out) == 0 {
+		return fmt.Sprintf("{raw_len=%d decode=failed}", len(payload))
+	}
+	return h3FormatHeaders(out)
+}
+
+func h3ErrorName(code uint64) string {
+	switch code {
+	case h3ErrorNoError:
+		return "H3_NO_ERROR"
+	case h3ErrorGeneralProtocol:
+		return "H3_GENERAL_PROTOCOL_ERROR"
+	case h3ErrorInternal:
+		return "H3_INTERNAL_ERROR"
+	case h3ErrorStreamCreation:
+		return "H3_STREAM_CREATION_ERROR"
+	case h3ErrorClosedCriticalStream:
+		return "H3_CLOSED_CRITICAL_STREAM"
+	case h3ErrorFrameUnexpected:
+		return "H3_FRAME_UNEXPECTED"
+	case h3ErrorFrame:
+		return "H3_FRAME_ERROR"
+	case h3ErrorExcessiveLoad:
+		return "H3_EXCESSIVE_LOAD"
+	case h3ErrorID:
+		return "H3_ID_ERROR"
+	case h3ErrorSettings:
+		return "H3_SETTINGS_ERROR"
+	case h3ErrorMissingSettings:
+		return "H3_MISSING_SETTINGS"
+	case h3ErrorRequestRejected:
+		return "H3_REQUEST_REJECTED"
+	case h3ErrorRequestCancelled:
+		return "H3_REQUEST_CANCELLED"
+	case h3ErrorRequestIncomplete:
+		return "H3_REQUEST_INCOMPLETE"
+	case h3ErrorMessage:
+		return "H3_MESSAGE_ERROR"
+	case h3ErrorConnect:
+		return "H3_CONNECT_ERROR"
+	case h3ErrorVersionFallback:
+		return "H3_VERSION_FALLBACK"
+	default:
+		return "unknown"
+	}
 }
 
 func h3FormatHeaders(h map[string]string) string {
