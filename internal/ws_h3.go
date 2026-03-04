@@ -4,9 +4,7 @@ package internal
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/quic"
@@ -28,6 +27,23 @@ const (
 	h3StreamQpackEncoder           = 0x2
 	h3StreamQpackDecoder           = 0x3
 	h3SettingEnableConnectProtocol = 0x08
+	h3ErrorNoError                 = 0x100
+	h3ErrorGeneralProtocol         = 0x101
+	h3ErrorInternal                = 0x102
+	h3ErrorStreamCreation          = 0x103
+	h3ErrorClosedCriticalStream    = 0x104
+	h3ErrorFrameUnexpected         = 0x105
+	h3ErrorFrame                   = 0x106
+	h3ErrorExcessiveLoad           = 0x107
+	h3ErrorID                      = 0x108
+	h3ErrorSettings                = 0x109
+	h3ErrorMissingSettings         = 0x10a
+	h3ErrorRequestRejected         = 0x10b
+	h3ErrorRequestCancelled        = 0x10c
+	h3ErrorRequestIncomplete       = 0x10d
+	h3ErrorMessage                 = 0x10e
+	h3ErrorConnect                 = 0x10f
+	h3ErrorVersionFallback         = 0x110
 )
 
 type h3ClientStreamProfile uint8
@@ -42,6 +58,55 @@ type h3wsStream struct {
 	qc              *quic.Conn
 	ep              *quic.Endpoint
 	stopPeerDrainer context.CancelFunc
+}
+
+type h3PeerObservations struct {
+	mu                    sync.RWMutex
+	sawSettings           bool
+	enableConnectProtocol bool
+	settingsSeen          chan struct{}
+}
+
+func newH3PeerObservations() *h3PeerObservations {
+	return &h3PeerObservations{settingsSeen: make(chan struct{})}
+}
+
+func (o *h3PeerObservations) setSettings(enableConnectProtocol bool) {
+	o.mu.Lock()
+	alreadySaw := o.sawSettings
+	o.sawSettings = true
+	o.enableConnectProtocol = enableConnectProtocol
+	ch := o.settingsSeen
+	o.mu.Unlock()
+	if !alreadySaw && ch != nil {
+		close(ch)
+	}
+}
+
+func (o *h3PeerObservations) snapshot() (sawSettings bool, enableConnectProtocol bool) {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.sawSettings, o.enableConnectProtocol
+}
+
+func (o *h3PeerObservations) waitSettings(timeout time.Duration) {
+	if o == nil || timeout <= 0 {
+		return
+	}
+	o.mu.RLock()
+	if o.sawSettings {
+		o.mu.RUnlock()
+		return
+	}
+	ch := o.settingsSeen
+	o.mu.RUnlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+	}
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
@@ -132,15 +197,16 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		wsDebugf("h3: quic listen failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: quic endpoint ready, dialing addr=%q", dialAddr)
+	wsDebugf("h3: quic endpoint ready, dialing addr=%q sni=%q alpn=%v", dialAddr, tlsConf.ServerName, tlsConf.NextProtos)
 	qconn, err := ep.Dial(h3ctx, "udp", dialAddr, qcConf)
 	if err != nil {
-		wsDebugf("h3: quic dial failed addr=%q err=%v", dialAddr, err)
+		wsDebugf("h3: quic dial failed addr=%q err=%s", dialAddr, h3DescribeErr(err))
 		_ = ep.Close(context.Background())
 		return nil, err
 	}
 	wsDebugf("h3: quic dial established addr=%q", dialAddr)
-	peerDrainCancel := startH3PeerStreamDrainer(qconn)
+	obs := newH3PeerObservations()
+	peerDrainCancel := startH3PeerStreamDrainer(qconn, obs)
 	h3Established := false
 	defer func() {
 		if h3Established {
@@ -153,7 +219,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		wsDebugf("h3: open client uni streams failed err=%v", err)
 		return nil, err
 	}
-	wsDebugf("h3: client streams initialized profile=%d", profile)
+	wsDebugf("h3: client streams initialized profile=%d (%s)", profile, h3ProfileName(profile))
 
 	st, err := qconn.NewStream(h3ctx)
 	if err != nil {
@@ -162,17 +228,11 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	}
 	wsDebugf("h3: request stream opened")
 
-	key, accept, err := h3WebSocketKeyAccept()
-	if err != nil {
-		return nil, err
-	}
-	headers := h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}})
-	if origin := u.Query().Get("origin"); origin != "" {
-		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
-	}
+	headers := h3ConnectHeaders(u, authority)
 	requestFrame := appendVarint(nil, h3FrameHeaders)
 	requestFrame = appendVarint(requestFrame, uint64(len(headers)))
 	requestFrame = append(requestFrame, headers...)
+	wsDebugf("h3: request CONNECT headers=%s", h3FormatHeaders(h3ConnectHeaderMap(u, authority)))
 	wsDebugf("h3: writing HEADERS frame total_len=%d (field_section_len=%d)", len(requestFrame), len(headers))
 	if err := h3WriteWithContext(h3ctx, st, requestFrame); err != nil {
 		wsDebugf("h3: write HEADERS frame failed err=%v", err)
@@ -213,7 +273,12 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
-		wsDebugf("h3: read response headers failed err=%v", err)
+		if hint := h3PeerSupportHint(err, obs); hint != "" {
+			wsDebugf("h3: read response headers failed hint=%s", hint)
+			wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
+			return nil, fmt.Errorf("rfc9220 unsupported by peer: %s", hint)
+		}
+		wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
 		return nil, err
 	case resp = <-respCh:
 	}
@@ -221,16 +286,15 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	if resp[":status"] != "200" {
 		return nil, fmt.Errorf("rfc9220 connect failed: status=%s headers=%s", resp[":status"], h3FormatHeaders(resp))
 	}
-	if got := resp["sec-websocket-accept"]; got != "" && got != accept {
-		wsDebugf("h3: bad sec-websocket-accept got=%q", got)
-		return nil, fmt.Errorf("rfc9220 bad sec-websocket-accept")
+	if got := resp["sec-websocket-accept"]; got != "" {
+		wsDebugf("h3: server returned optional sec-websocket-accept=%q", got)
 	}
 	wsDebugf("h3: websocket CONNECT established")
 	h3Established = true
 	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
 }
 
-func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
+func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.CancelFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
@@ -247,6 +311,10 @@ func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
 					typ, err := readVarint(s)
 					if err == nil {
 						wsDebugf("h3: peer stream accepted type=%d", typ)
+						if typ == h3StreamControl {
+							h3LogPeerControlStream(s, obs)
+							return
+						}
 					}
 				} else {
 					wsDebugf("h3: peer bidi stream accepted")
@@ -329,7 +397,30 @@ func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
 	return nil
 }
 
+func h3ConnectHeaders(u *url.URL, authority string) []byte {
+	fields := h3ConnectHeaderFields(u, authority)
+	return h3EncodeHeaders(fields)
+}
+
+func h3ConnectHeaderMap(u *url.URL, authority string) map[string]string {
+	out := map[string]string{}
+	for _, f := range h3ConnectHeaderFields(u, authority) {
+		out[f[0]] = f[1]
+	}
+	return out
+}
+
+func h3ConnectHeaderFields(u *url.URL, authority string) [][2]string {
+	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}}
+	if origin := u.Query().Get("origin"); origin != "" {
+		fields = append(fields, [2]string{"origin", origin})
+	}
+	return fields
+}
+
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
+	const maxLoggedNonHeadersFrames = 8
+	nonHeaders := 0
 	for {
 		ft, err := readVarint(r)
 		if err != nil {
@@ -346,6 +437,163 @@ func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
 		if ft == h3FrameHeaders {
 			return h3DecodeHeaders(buf)
 		}
+		nonHeaders++
+		if nonHeaders <= maxLoggedNonHeadersFrames {
+			wsDebugf("h3: pre-response frame #%d type=%d len=%d (waiting for HEADERS)", nonHeaders, ft, n)
+		}
+	}
+}
+
+func h3ProfileName(p h3ClientStreamProfile) string {
+	switch p {
+	case h3ClientStreamsControlAndQPACK:
+		return "control+qpack"
+	case h3ClientStreamsControlOnly:
+		return "control-only"
+	default:
+		return "unknown"
+	}
+}
+
+func h3DescribeErr(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	parts := []string{fmt.Sprintf("%T: %v", err, err)}
+	for u := errors.Unwrap(err); u != nil; u = errors.Unwrap(u) {
+		parts = append(parts, fmt.Sprintf("%T: %v", u, u))
+		if sc, ok := u.(quic.StreamErrorCode); ok {
+			parts = append(parts, fmt.Sprintf("quic.StreamErrorCode=0x%x (%s)", uint64(sc), h3ErrorName(uint64(sc))))
+		}
+	}
+	return strings.Join(parts, " | cause: ")
+}
+
+func h3LogPeerControlStream(r io.Reader, obs *h3PeerObservations) {
+	const maxControlFramesToLog = 8
+	for i := 0; i < maxControlFramesToLog; i++ {
+		ft, err := readVarint(r)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				wsDebugf("h3: peer control stream read end err=%s", h3DescribeErr(err))
+			}
+			return
+		}
+		n, err := readVarint(r)
+		if err != nil {
+			wsDebugf("h3: peer control stream read frame length failed err=%s", h3DescribeErr(err))
+			return
+		}
+		payload := make([]byte, n)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			wsDebugf("h3: peer control stream read frame payload failed type=%d len=%d err=%s", ft, n, h3DescribeErr(err))
+			return
+		}
+		if ft == h3FrameSettings {
+			enableConnectProtocol, formatted := h3ParseSettingsPayload(payload)
+			if obs != nil {
+				obs.setSettings(enableConnectProtocol)
+			}
+			wsDebugf("h3: peer SETTINGS %s", formatted)
+			continue
+		}
+		wsDebugf("h3: peer control frame type=%d len=%d", ft, n)
+	}
+}
+
+func h3ParseSettingsPayload(payload []byte) (enableConnectProtocol bool, formatted string) {
+	if len(payload) == 0 {
+		return false, "{}"
+	}
+	out := map[string]string{}
+	r := strings.NewReader(string(payload))
+	idx := 0
+	for r.Len() > 0 && idx < 32 {
+		id, err := readVarint(r)
+		if err != nil {
+			break
+		}
+		val, err := readVarint(r)
+		if err != nil {
+			break
+		}
+		name := fmt.Sprintf("0x%x", id)
+		if id == h3SettingEnableConnectProtocol {
+			name = "ENABLE_CONNECT_PROTOCOL(0x8)"
+			enableConnectProtocol = (val == 1)
+		}
+		out[name] = fmt.Sprintf("%d", val)
+		idx++
+	}
+	if len(out) == 0 {
+		return false, fmt.Sprintf("{raw_len=%d decode=failed}", len(payload))
+	}
+	return enableConnectProtocol, h3FormatHeaders(out)
+}
+
+func h3PeerSupportHint(err error, obs *h3PeerObservations) string {
+	if obs == nil {
+		return ""
+	}
+	isMessageErr := false
+	for u := err; u != nil; u = errors.Unwrap(u) {
+		if sc, ok := u.(quic.StreamErrorCode); ok && uint64(sc) == h3ErrorMessage {
+			isMessageErr = true
+			break
+		}
+	}
+	if !isMessageErr {
+		return ""
+	}
+	// Control stream SETTINGS can arrive slightly after request stream reset.
+	// Give the drainer a short chance to observe peer capabilities before
+	// deciding whether to emit the unsupported-RFC9220 hint.
+	obs.waitSettings(150 * time.Millisecond)
+	saw, enable := obs.snapshot()
+	if !saw || enable {
+		return ""
+	}
+	return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1 (enable RFC9220 Extended CONNECT on proxy, or remove h3=only for h1/h2 fallback)"
+}
+
+func h3ErrorName(code uint64) string {
+	switch code {
+	case h3ErrorNoError:
+		return "H3_NO_ERROR"
+	case h3ErrorGeneralProtocol:
+		return "H3_GENERAL_PROTOCOL_ERROR"
+	case h3ErrorInternal:
+		return "H3_INTERNAL_ERROR"
+	case h3ErrorStreamCreation:
+		return "H3_STREAM_CREATION_ERROR"
+	case h3ErrorClosedCriticalStream:
+		return "H3_CLOSED_CRITICAL_STREAM"
+	case h3ErrorFrameUnexpected:
+		return "H3_FRAME_UNEXPECTED"
+	case h3ErrorFrame:
+		return "H3_FRAME_ERROR"
+	case h3ErrorExcessiveLoad:
+		return "H3_EXCESSIVE_LOAD"
+	case h3ErrorID:
+		return "H3_ID_ERROR"
+	case h3ErrorSettings:
+		return "H3_SETTINGS_ERROR"
+	case h3ErrorMissingSettings:
+		return "H3_MISSING_SETTINGS"
+	case h3ErrorRequestRejected:
+		return "H3_REQUEST_REJECTED"
+	case h3ErrorRequestCancelled:
+		return "H3_REQUEST_CANCELLED"
+	case h3ErrorRequestIncomplete:
+		return "H3_REQUEST_INCOMPLETE"
+	case h3ErrorMessage:
+		return "H3_MESSAGE_ERROR"
+	case h3ErrorConnect:
+		return "H3_CONNECT_ERROR"
+	case h3ErrorVersionFallback:
+		return "H3_VERSION_FALLBACK"
+	default:
+		return "unknown"
 	}
 }
 
@@ -410,13 +658,4 @@ func readVarint(r io.Reader) (uint64, error) {
 		v = (v << 8) | uint64(b)
 	}
 	return v, nil
-}
-
-func h3WebSocketKeyAccept() (string, string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", "", err
-	}
-	key := base64.StdEncoding.EncodeToString(raw)
-	return key, computeAccept(key), nil
 }
