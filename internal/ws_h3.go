@@ -4,9 +4,7 @@ package internal
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -410,13 +408,4 @@ func readVarint(r io.Reader) (uint64, error) {
 		v = (v << 8) | uint64(b)
 	}
 	return v, nil
-}
-
-func h3WebSocketKeyAccept() (string, string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", "", err
-	}
-	key := base64.StdEncoding.EncodeToString(raw)
-	return key, computeAccept(key), nil
 }
