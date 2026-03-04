@@ -557,7 +557,7 @@ func h3PeerSupportHint(err error, obs *h3PeerObservations) string {
 	if !saw || enable {
 		return ""
 	}
-	return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1; RFC9220 Extended CONNECT likely unsupported on this H3 endpoint/proxy"
+	return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1; RFC9220 Extended CONNECT is unsupported on this H3 endpoint/proxy (HAProxy: enable RFC9220/Extended CONNECT support or remove h3=only to allow h1/h2 fallback)"
 }
 
 func h3ErrorName(code uint64) string {

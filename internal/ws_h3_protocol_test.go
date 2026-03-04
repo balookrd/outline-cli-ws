@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +153,9 @@ func TestH3PeerSupportHint_WhenMissingEnableConnectProtocol(t *testing.T) {
 	if hint == "" {
 		t.Fatalf("expected support hint for H3_MESSAGE_ERROR with missing ENABLE_CONNECT_PROTOCOL")
 	}
+	if !strings.Contains(hint, "remove h3=only") {
+		t.Fatalf("expected remediation in hint, got %q", hint)
+	}
 }
 
 func TestH3PeerSupportHint_WaitsForLateSettingsObservation(t *testing.T) {
@@ -164,5 +168,8 @@ func TestH3PeerSupportHint_WaitsForLateSettingsObservation(t *testing.T) {
 	hint := h3PeerSupportHint(fmt.Errorf("wrap: %w", quic.StreamErrorCode(h3ErrorMessage)), obs)
 	if hint == "" {
 		t.Fatalf("expected support hint after delayed SETTINGS observation")
+	}
+	if !strings.Contains(hint, "remove h3=only") {
+		t.Fatalf("expected remediation in delayed hint, got %q", hint)
 	}
 }
