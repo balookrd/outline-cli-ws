@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -96,5 +97,33 @@ func TestRFC9220ClientToWSAndBack(t *testing.T) {
 
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server flow failed: %v", err)
+	}
+}
+
+func TestH3ConnectHeaders_OmitsClassicWebSocketHeaders(t *testing.T) {
+	u, err := url.Parse("wss://example.com/maiRfy1HEEkssRrSfffYu8/udp?h3=only&origin=https%3A%2F%2Fclient.example")
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+
+	headers, err := h3DecodeHeaders(h3ConnectHeaders(u, u.Host))
+	if err != nil {
+		t.Fatalf("decode headers: %v", err)
+	}
+
+	if got := headers[":method"]; got != "CONNECT" {
+		t.Fatalf(":method=%q want CONNECT", got)
+	}
+	if got := headers[":protocol"]; got != "websocket" {
+		t.Fatalf(":protocol=%q want websocket", got)
+	}
+	if got := headers[":path"]; got != "/maiRfy1HEEkssRrSfffYu8/udp?origin=https%3A%2F%2Fclient.example" {
+		t.Fatalf(":path=%q", got)
+	}
+	if _, ok := headers["sec-websocket-key"]; ok {
+		t.Fatalf("did not expect sec-websocket-key in RFC9220 CONNECT headers")
+	}
+	if _, ok := headers["sec-websocket-version"]; ok {
+		t.Fatalf("did not expect sec-websocket-version in RFC9220 CONNECT headers")
 	}
 }

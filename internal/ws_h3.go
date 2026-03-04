@@ -162,14 +162,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	}
 	wsDebugf("h3: request stream opened")
 
-	key, accept, err := h3WebSocketKeyAccept()
-	if err != nil {
-		return nil, err
-	}
-	headers := h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}})
-	if origin := u.Query().Get("origin"); origin != "" {
-		headers = h3EncodeHeaders([][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}, {"sec-websocket-key", key}, {"origin", origin}})
-	}
+	headers := h3ConnectHeaders(u, authority)
 	requestFrame := appendVarint(nil, h3FrameHeaders)
 	requestFrame = appendVarint(requestFrame, uint64(len(headers)))
 	requestFrame = append(requestFrame, headers...)
@@ -221,9 +214,8 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	if resp[":status"] != "200" {
 		return nil, fmt.Errorf("rfc9220 connect failed: status=%s headers=%s", resp[":status"], h3FormatHeaders(resp))
 	}
-	if got := resp["sec-websocket-accept"]; got != "" && got != accept {
-		wsDebugf("h3: bad sec-websocket-accept got=%q", got)
-		return nil, fmt.Errorf("rfc9220 bad sec-websocket-accept")
+	if got := resp["sec-websocket-accept"]; got != "" {
+		wsDebugf("h3: server returned optional sec-websocket-accept=%q", got)
 	}
 	wsDebugf("h3: websocket CONNECT established")
 	h3Established = true
@@ -327,6 +319,14 @@ func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
 		remaining = remaining[n:]
 	}
 	return nil
+}
+
+func h3ConnectHeaders(u *url.URL, authority string) []byte {
+	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}}
+	if origin := u.Query().Get("origin"); origin != "" {
+		fields = append(fields, [2]string{"origin", origin})
+	}
+	return h3EncodeHeaders(fields)
 }
 
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {
