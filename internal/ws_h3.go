@@ -275,7 +275,8 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	case err := <-errCh:
 		if hint := h3PeerSupportHint(err, obs); hint != "" {
 			wsDebugf("h3: read response headers failed hint=%s", hint)
-			err = fmt.Errorf("%w: %s", err, hint)
+			wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
+			return nil, fmt.Errorf("rfc9220 unsupported by peer: %s", hint)
 		}
 		wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
 		return nil, err
