@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"golang.org/x/net/quic"
 )
 
 func TestH3ReadResponseHeadersFromQUICFrames(t *testing.T) {
@@ -125,5 +127,29 @@ func TestH3ConnectHeaders_RFC9220Shape(t *testing.T) {
 	}
 	if got := headers["sec-websocket-version"]; got != "13" {
 		t.Fatalf("sec-websocket-version=%q want 13", got)
+	}
+}
+
+func TestH3ParseSettingsPayload_EnableConnectProtocol(t *testing.T) {
+	payload := appendVarint(nil, h3SettingEnableConnectProtocol)
+	payload = appendVarint(payload, 1)
+	payload = appendVarint(payload, 0x6)
+	payload = appendVarint(payload, 4096)
+
+	enable, formatted := h3ParseSettingsPayload(payload)
+	if !enable {
+		t.Fatalf("expected ENABLE_CONNECT_PROTOCOL to be detected")
+	}
+	if formatted == "" || formatted == "{}" {
+		t.Fatalf("unexpected formatted settings: %q", formatted)
+	}
+}
+
+func TestH3PeerSupportHint_WhenMissingEnableConnectProtocol(t *testing.T) {
+	obs := &h3PeerObservations{}
+	obs.setSettings(false)
+	hint := h3PeerSupportHint(fmt.Errorf("wrap: %w", quic.StreamErrorCode(h3ErrorMessage)), obs)
+	if hint == "" {
+		t.Fatalf("expected support hint for H3_MESSAGE_ERROR with missing ENABLE_CONNECT_PROTOCOL")
 	}
 }

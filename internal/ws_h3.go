@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/quic"
@@ -57,6 +58,25 @@ type h3wsStream struct {
 	qc              *quic.Conn
 	ep              *quic.Endpoint
 	stopPeerDrainer context.CancelFunc
+}
+
+type h3PeerObservations struct {
+	mu                    sync.RWMutex
+	sawSettings           bool
+	enableConnectProtocol bool
+}
+
+func (o *h3PeerObservations) setSettings(enableConnectProtocol bool) {
+	o.mu.Lock()
+	o.sawSettings = true
+	o.enableConnectProtocol = enableConnectProtocol
+	o.mu.Unlock()
+}
+
+func (o *h3PeerObservations) snapshot() (sawSettings bool, enableConnectProtocol bool) {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.sawSettings, o.enableConnectProtocol
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
@@ -155,7 +175,8 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		return nil, err
 	}
 	wsDebugf("h3: quic dial established addr=%q", dialAddr)
-	peerDrainCancel := startH3PeerStreamDrainer(qconn)
+	obs := &h3PeerObservations{}
+	peerDrainCancel := startH3PeerStreamDrainer(qconn, obs)
 	h3Established := false
 	defer func() {
 		if h3Established {
@@ -222,6 +243,10 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 		}
 		return nil, h3ctx.Err()
 	case err := <-errCh:
+		if hint := h3PeerSupportHint(err, obs); hint != "" {
+			wsDebugf("h3: read response headers failed hint=%s", hint)
+			err = fmt.Errorf("%w: %s", err, hint)
+		}
 		wsDebugf("h3: read response headers failed err=%s", h3DescribeErr(err))
 		return nil, err
 	case resp = <-respCh:
@@ -238,7 +263,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
 }
 
-func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
+func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.CancelFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
@@ -256,7 +281,7 @@ func startH3PeerStreamDrainer(c *quic.Conn) context.CancelFunc {
 					if err == nil {
 						wsDebugf("h3: peer stream accepted type=%d", typ)
 						if typ == h3StreamControl {
-							h3LogPeerControlStream(s)
+							h3LogPeerControlStream(s, obs)
 							return
 						}
 					}
@@ -413,7 +438,7 @@ func h3DescribeErr(err error) string {
 	return strings.Join(parts, " | cause: ")
 }
 
-func h3LogPeerControlStream(r io.Reader) {
+func h3LogPeerControlStream(r io.Reader, obs *h3PeerObservations) {
 	const maxControlFramesToLog = 8
 	for i := 0; i < maxControlFramesToLog; i++ {
 		ft, err := readVarint(r)
@@ -434,7 +459,11 @@ func h3LogPeerControlStream(r io.Reader) {
 			return
 		}
 		if ft == h3FrameSettings {
-			wsDebugf("h3: peer SETTINGS %s", h3FormatSettingsPayload(payload))
+			enableConnectProtocol, formatted := h3ParseSettingsPayload(payload)
+			if obs != nil {
+				obs.setSettings(enableConnectProtocol)
+			}
+			wsDebugf("h3: peer SETTINGS %s", formatted)
 			continue
 		}
 		wsDebugf("h3: peer control frame type=%d len=%d", ft, n)
@@ -442,8 +471,13 @@ func h3LogPeerControlStream(r io.Reader) {
 }
 
 func h3FormatSettingsPayload(payload []byte) string {
+	_, formatted := h3ParseSettingsPayload(payload)
+	return formatted
+}
+
+func h3ParseSettingsPayload(payload []byte) (enableConnectProtocol bool, formatted string) {
 	if len(payload) == 0 {
-		return "{}"
+		return false, "{}"
 	}
 	out := map[string]string{}
 	r := strings.NewReader(string(payload))
@@ -460,14 +494,34 @@ func h3FormatSettingsPayload(payload []byte) string {
 		name := fmt.Sprintf("0x%x", id)
 		if id == h3SettingEnableConnectProtocol {
 			name = "ENABLE_CONNECT_PROTOCOL(0x8)"
+			enableConnectProtocol = (val == 1)
 		}
 		out[name] = fmt.Sprintf("%d", val)
 		idx++
 	}
 	if len(out) == 0 {
-		return fmt.Sprintf("{raw_len=%d decode=failed}", len(payload))
+		return false, fmt.Sprintf("{raw_len=%d decode=failed}", len(payload))
 	}
-	return h3FormatHeaders(out)
+	return enableConnectProtocol, h3FormatHeaders(out)
+}
+
+func h3PeerSupportHint(err error, obs *h3PeerObservations) string {
+	if obs == nil {
+		return ""
+	}
+	saw, enable := obs.snapshot()
+	if !saw {
+		return ""
+	}
+	if enable {
+		return ""
+	}
+	for u := err; u != nil; u = errors.Unwrap(u) {
+		if sc, ok := u.(quic.StreamErrorCode); ok && uint64(sc) == h3ErrorMessage {
+			return "peer SETTINGS missing ENABLE_CONNECT_PROTOCOL=1; RFC9220 Extended CONNECT likely unsupported on this H3 endpoint/proxy"
+		}
+	}
+	return ""
 }
 
 func h3ErrorName(code uint64) string {
