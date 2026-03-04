@@ -320,7 +320,7 @@ func h3WriteWithContext(ctx context.Context, st *quic.Stream, b []byte) error {
 }
 
 func h3ConnectHeaders(u *url.URL, authority string) []byte {
-	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}}
+	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}}
 	if origin := u.Query().Get("origin"); origin != "" {
 		fields = append(fields, [2]string{"origin", origin})
 	}

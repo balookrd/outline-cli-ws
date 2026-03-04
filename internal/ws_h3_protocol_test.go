@@ -100,7 +100,7 @@ func TestRFC9220ClientToWSAndBack(t *testing.T) {
 	}
 }
 
-func TestH3ConnectHeaders_OmitsClassicWebSocketHeaders(t *testing.T) {
+func TestH3ConnectHeaders_RFC9220Shape(t *testing.T) {
 	u, err := url.Parse("wss://example.com/maiRfy1HEEkssRrSfffYu8/udp?h3=only&origin=https%3A%2F%2Fclient.example")
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
@@ -123,7 +123,7 @@ func TestH3ConnectHeaders_OmitsClassicWebSocketHeaders(t *testing.T) {
 	if _, ok := headers["sec-websocket-key"]; ok {
 		t.Fatalf("did not expect sec-websocket-key in RFC9220 CONNECT headers")
 	}
-	if _, ok := headers["sec-websocket-version"]; ok {
-		t.Fatalf("did not expect sec-websocket-version in RFC9220 CONNECT headers")
+	if got := headers["sec-websocket-version"]; got != "13" {
+		t.Fatalf("sec-websocket-version=%q want 13", got)
 	}
 }
