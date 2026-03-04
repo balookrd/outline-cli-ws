@@ -500,11 +500,6 @@ func h3LogPeerControlStream(r io.Reader, obs *h3PeerObservations) {
 	}
 }
 
-func h3FormatSettingsPayload(payload []byte) string {
-	_, formatted := h3ParseSettingsPayload(payload)
-	return formatted
-}
-
 func h3ParseSettingsPayload(payload []byte) (enableConnectProtocol bool, formatted string) {
 	if len(payload) == 0 {
 		return false, "{}"
