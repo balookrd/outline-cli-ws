@@ -181,41 +181,52 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 			_ = c.s.Close()
 			return 0, nil, io.EOF
 		case WSMessageContinuation:
-			// Continuation without an active message is a protocol error.
-			return 0, nil, fmt.Errorf("websocket protocol error: unexpected continuation frame")
+			// Some non-compliant intermediaries emit opcode=continuation as the
+			// first fragment. Tolerate it as a binary message to avoid tearing
+			// down an otherwise healthy tunnel.
+			wsDebugf("ws framing: treating unexpected continuation as binary first fragment")
+			return c.readFragmentedMessage(ctx, WSMessageBinary, payload, fin)
 		default:
 			if fin {
 				return typ, payload, nil
 			}
-			// Fragmented message: accumulate continuation frames until FIN.
-			buf := append([]byte(nil), payload...)
-			for {
-				if err := ctx.Err(); err != nil {
-					return 0, nil, err
-				}
-				op2, p2, fin2, err := readFrame(c.br)
-				if err != nil {
-					return 0, nil, err
-				}
-				switch op2 {
-				case WSMessagePing:
-					_ = c.Write(ctx, WSMessagePong, p2)
-					continue
-				case WSMessagePong:
-					continue
-				case WSMessageClose:
-					_ = c.Close(WSStatusNormalClosure, "")
-					return 0, nil, io.EOF
-				case WSMessageContinuation:
-					buf = append(buf, p2...)
-					if fin2 {
-						return typ, buf, nil
-					}
-				default:
-					// Interleaved data frames during fragmentation are invalid.
-					return 0, nil, fmt.Errorf("websocket protocol error: expected continuation, got opcode=%d", op2)
-				}
+			return c.readFragmentedMessage(ctx, typ, payload, fin)
+		}
+	}
+}
+
+func (c *framedWSConn) readFragmentedMessage(ctx context.Context, firstType WSMessageType, firstPayload []byte, firstFIN bool) (WSMessageType, []byte, error) {
+	if firstFIN {
+		return firstType, firstPayload, nil
+	}
+
+	// Fragmented message: accumulate continuation frames until FIN.
+	buf := append([]byte(nil), firstPayload...)
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		op2, p2, fin2, err := readFrame(c.br)
+		if err != nil {
+			return 0, nil, err
+		}
+		switch op2 {
+		case WSMessagePing:
+			_ = c.Write(ctx, WSMessagePong, p2)
+			continue
+		case WSMessagePong:
+			continue
+		case WSMessageClose:
+			_ = c.Close(WSStatusNormalClosure, "")
+			return 0, nil, io.EOF
+		case WSMessageContinuation:
+			buf = append(buf, p2...)
+			if fin2 {
+				return firstType, buf, nil
 			}
+		default:
+			// Interleaved data frames during fragmentation are invalid.
+			return 0, nil, fmt.Errorf("websocket protocol error: expected continuation, got opcode=%d", op2)
 		}
 	}
 }
