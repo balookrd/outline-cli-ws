@@ -89,8 +89,10 @@ The client supports three upstream WebSocket transport families:
 Mode is selected by URL query flags on `tcp_wss` / `udp_wss`:
 
 * `?h2=only` → strict **h2** mode (no fallback)
+* `?rfc8441=1` / `?rfc8441=only` → aliases for **h2** try/strict modes
 * `?h3=1` / `?http3=1` / `?quic=1` → try **h3**, then fallback
 * `?h3=only` / `?http3=only` → strict **h3** mode (no fallback)
+* `?rfc9220=1` / `?rfc9220=only` → aliases for **h3** try/strict modes
 * `?connect=only` (or `extended_connect=only`) → allow only Extended CONNECT (h2/h3), block HTTP/1.1 Upgrade fallback
 * no mode flags → default **h1** path (with automatic upgrades when explicitly requested)
 
