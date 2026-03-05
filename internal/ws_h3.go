@@ -115,7 +115,11 @@ func (s *h3wsStream) Close() error {
 	if s.stopPeerDrainer != nil {
 		s.stopPeerDrainer()
 	}
-	s.s.CloseRead()
+	// Gracefully half-close the request/data stream.
+	//
+	// For RFC9220 this stream carries WebSocket data bidirectionally; forcing
+	// CloseRead() emits STOP_SENDING and can look like abrupt teardown in peer
+	// logs even after a normal WS close handshake.
 	s.s.CloseWrite()
 	_ = s.qc.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

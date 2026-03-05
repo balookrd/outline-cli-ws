@@ -78,11 +78,14 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	}
 
 	if e1 != nil && !errors.Is(e1, io.EOF) {
+		wsDebugf("tcp relay returning hard error from first side upstream=%q dst=%q dir=%s err=%v", up.Name, dst, r1.dir, e1)
 		return e1
 	}
 	if e2 != nil && !errors.Is(e2, io.EOF) {
+		wsDebugf("tcp relay returning hard error from second side upstream=%q dst=%q dir=%s err=%v", up.Name, dst, r2.dir, e2)
 		return e2
 	}
+	wsDebugf("tcp relay completed cleanly upstream=%q dst=%q first_dir=%s first_err=%v second_dir=%s second_err=%v", up.Name, dst, r1.dir, e1, r2.dir, e2)
 	return nil
 }
 
@@ -138,6 +141,7 @@ func (w *WSStreamConn) Close() error {
 	// Close the underlying WebSocket stream so the server can free resources.
 	// Previously this was a no-op which led to leaked streams and flaky TLS.
 	w.closeOnce.Do(func() {
+		wsDebugf("ws stream close requested upstream=%q proto=%q", w.upstream, w.proto)
 		if w.cancel != nil {
 			w.cancel()
 		}
