@@ -427,7 +427,7 @@ func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
 	if err != nil {
 		return base
 	}
-	_, _, tryH3, h3Only := parseTransportHints(u.Query())
+	_, _, tryH3, h3Only, _ := parseTransportHints(u.Query())
 	if (tryH3 || h3Only) && base < h3HealthcheckMinTimeout {
 		return h3HealthcheckMinTimeout
 	}
