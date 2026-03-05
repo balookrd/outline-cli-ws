@@ -4,7 +4,9 @@ package internal
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -412,10 +414,22 @@ func h3ConnectHeaderMap(u *url.URL, authority string) map[string]string {
 
 func h3ConnectHeaderFields(u *url.URL, authority string) [][2]string {
 	fields := [][2]string{{":method", "CONNECT"}, {":scheme", "https"}, {":authority", authority}, {":path", cleanedRequestURI(u)}, {":protocol", "websocket"}, {"sec-websocket-version", "13"}}
+	if key := websocketRequestKey(); key != "" {
+		fields = append(fields, [2]string{"sec-websocket-key", key})
+	}
 	if origin := u.Query().Get("origin"); origin != "" {
 		fields = append(fields, [2]string{"origin", origin})
 	}
 	return fields
+}
+
+func websocketRequestKey() string {
+	keyRaw := make([]byte, 16)
+	if _, err := rand.Read(keyRaw); err != nil {
+		wsDebugf("h3: failed to generate sec-websocket-key: %v", err)
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(keyRaw)
 }
 
 func h3ReadResponseHeaders(r io.Reader) (map[string]string, error) {

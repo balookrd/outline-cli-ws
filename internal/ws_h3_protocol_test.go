@@ -123,8 +123,8 @@ func TestH3ConnectHeaders_RFC9220Shape(t *testing.T) {
 	if got := headers[":path"]; got != "/maiRfy1HEEkssRrSfffYu8/udp?origin=https%3A%2F%2Fclient.example" {
 		t.Fatalf(":path=%q", got)
 	}
-	if _, ok := headers["sec-websocket-key"]; ok {
-		t.Fatalf("did not expect sec-websocket-key in RFC9220 CONNECT headers")
+	if got := headers["sec-websocket-key"]; got == "" {
+		t.Fatalf("expected sec-websocket-key in RFC9220 CONNECT headers")
 	}
 	if got := headers["sec-websocket-version"]; got != "13" {
 		t.Fatalf("sec-websocket-version=%q want 13", got)
