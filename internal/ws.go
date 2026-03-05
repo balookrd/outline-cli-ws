@@ -64,8 +64,8 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		},
 	}
 
-	tryH2, h2Only, tryH3, h3Only := parseTransportHints(u.Query())
-	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v", u.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only)
+	tryH2, h2Only, tryH3, h3Only, connectOnly := parseTransportHints(u.Query())
+	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v connectOnly=%v", u.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only, connectOnly)
 
 	if tryH3 && isWebSocketLikeScheme(u.Scheme) {
 		wsDebugf("attempt h3/rfc9220 dial url=%q", u.Redacted())
@@ -118,6 +118,10 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		// else: fall back to classic websocket.
 	}
 
+	if connectOnly {
+		return nil, fmt.Errorf("extended-connect-only mode blocks h1 websocket upgrade fallback")
+	}
+
 	// Classic websocket (HTTP/1.1 upgrade).
 	wsDebugf("attempt h1 websocket upgrade url=%q", u.Redacted())
 	c, err := dialCoderWebSocket(ctx, u.String(), tr)
@@ -130,13 +134,20 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	return c, nil
 }
 
-func parseTransportHints(q url.Values) (tryH2, h2Only, tryH3, h3Only bool) {
+func parseTransportHints(q url.Values) (tryH2, h2Only, tryH3, h3Only, connectOnly bool) {
 	tryH2 = q.Get("h2") == "1" || q.Get("http2") == "1" || q.Get("h2c") == "1"
 	h2Only = q.Get("h2") == "only" || q.Get("http2") == "only" || q.Get("h2only") == "1"
 	tryH3 = q.Get("h3") == "1" || q.Get("http3") == "1" || q.Get("quic") == "1"
 	h3Only = q.Get("h3") == "only" || q.Get("http3") == "only" || q.Get("h3only") == "1" || q.Get("quic") == "only"
+	connectOnly = q.Get("connect") == "only" || q.Get("extended_connect") == "only" || q.Get("extended-connect") == "only" || q.Get("connect_protocol") == "only" || q.Get("rfc8441") == "only" || q.Get("rfc9220") == "only"
+	if q.Get("connect") == "1" || q.Get("extended_connect") == "1" || q.Get("extended-connect") == "1" || q.Get("connect_protocol") == "1" || q.Get("rfc8441") == "1" || q.Get("rfc9220") == "1" {
+		connectOnly = true
+	}
 	if h3Only {
 		tryH3 = true
+	}
+	if h2Only || h3Only {
+		connectOnly = true
 	}
 	return
 }
