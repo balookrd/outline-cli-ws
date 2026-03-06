@@ -320,8 +320,9 @@ func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.Can
 				return
 			}
 			go func(s *quic.Stream) {
-				// peer-initiated uni streams будут read-only
-				defer s.CloseRead()
+				// peer-initiated uni streams are read-only; avoid CloseRead() here
+				// because STOP_SENDING on critical control streams may look abrupt
+				// to strict peers during normal connection teardown.
 
 				if s.IsReadOnly() {
 					// H3 uni stream начинается с varint stream type (0=control,2,3=qpack)
