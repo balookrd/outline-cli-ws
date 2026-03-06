@@ -141,21 +141,18 @@ func (s *h3wsStream) Write(p []byte) (int, error) {
 	frame = appendVarint(frame, uint64(len(p)))
 	frame = append(frame, p...)
 
-	nw, err := s.s.Write(frame)
-	if err != nil {
-		// Best-effort translation to payload bytes written.
-		if nw <= 0 {
+	remaining := frame
+	for len(remaining) > 0 {
+		n, err := s.s.Write(remaining)
+		if err != nil {
 			return 0, err
 		}
-		payloadWritten := nw - (len(frame) - len(p))
-		if payloadWritten < 0 {
-			payloadWritten = 0
+		if n <= 0 {
+			return 0, io.ErrShortWrite
 		}
-		if payloadWritten > len(p) {
-			payloadWritten = len(p)
-		}
-		return payloadWritten, err
+		remaining = remaining[n:]
 	}
+
 	if len(p) > 0 {
 		// QUIC stream writes can be buffered; flush eagerly so early payload
 		// bytes are not stranded when callers promptly close after writing.
@@ -169,13 +166,10 @@ func (s *h3wsStream) Close() error {
 	if s.stopPeerDrainer != nil {
 		s.stopPeerDrainer()
 	}
-	// Gracefully half-close the request/data stream.
-	//
-	// For RFC9220 this stream carries WebSocket data bidirectionally; forcing
-	// CloseRead() emits STOP_SENDING and can look like abrupt teardown in peer
-	// logs even after a normal WS close handshake.
+	// Gracefully half-close only request/data stream.
+	// Do not close the entire QUIC connection here: WS CLOSE should stay an
+	// in-stream signal and must not become QUIC CONNECTION_CLOSE.
 	s.s.CloseWrite()
-	s.s.CloseRead()
 	return nil
 }
 
