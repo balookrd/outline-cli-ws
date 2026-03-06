@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const tcpRelayDrainTimeout = 3 * time.Second
-
 type relayResult struct {
 	dir   string
 	bytes int64
@@ -66,15 +64,13 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	case r2 = <-errC:
 		wsDebugf("tcp relay side done upstream=%q dst=%q dir=%s bytes=%d err=%v", up.Name, dst, r2.dir, r2.bytes, r2.err)
 		e2 = r2.err
-	case <-time.After(tcpRelayDrainTimeout):
-		wsDebugf("tcp relay drain timeout upstream=%q dst=%q timeout=%s", up.Name, dst, tcpRelayDrainTimeout)
-		// Keep full-duplex behavior, but avoid leaking half-dead tunnels forever.
+	case <-ctx.Done():
 		_ = ssconn.Close()
 		_ = client.Close()
 		if e1 != nil && !errors.Is(e1, io.EOF) {
 			return e1
 		}
-		return nil
+		return ctx.Err()
 	}
 
 	if e1 != nil && !errors.Is(e1, io.EOF) {
