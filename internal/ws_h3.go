@@ -166,10 +166,10 @@ func (s *h3wsStream) Close() error {
 	if s.stopPeerDrainer != nil {
 		s.stopPeerDrainer()
 	}
-	// Gracefully half-close only request/data stream.
-	// Do not close the entire QUIC connection here: WS CLOSE should stay an
-	// in-stream signal and must not become QUIC CONNECTION_CLOSE.
-	s.s.CloseWrite()
+	// Do not signal FIN/STOP_SENDING here.
+	// RFC9220 WebSocket closure is carried by WS CLOSE frames inside H3 DATA.
+	// Sending QUIC stream finalization too early can terminate upload-side
+	// before the application-level close handshake fully propagates.
 	return nil
 }
 
