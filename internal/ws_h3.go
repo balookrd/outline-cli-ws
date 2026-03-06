@@ -110,7 +110,20 @@ func (o *h3PeerObservations) waitSettings(timeout time.Duration) {
 }
 
 func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
-func (s *h3wsStream) Write(p []byte) (int, error) { return s.s.Write(p) }
+func (s *h3wsStream) Write(p []byte) (int, error) {
+	n, err := s.s.Write(p)
+	if err != nil {
+		return n, err
+	}
+	if n > 0 {
+		// QUIC stream writes can be buffered; flush eagerly so early payload
+		// bytes are not stranded when callers promptly close after writing.
+		if ferr := s.s.Flush(); ferr != nil {
+			return n, ferr
+		}
+	}
+	return n, nil
+}
 func (s *h3wsStream) Close() error {
 	if s.stopPeerDrainer != nil {
 		s.stopPeerDrainer()
@@ -307,8 +320,9 @@ func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.Can
 				return
 			}
 			go func(s *quic.Stream) {
-				// peer-initiated uni streams будут read-only
-				defer s.CloseRead()
+				// peer-initiated uni streams are read-only; avoid CloseRead() here
+				// because STOP_SENDING on critical control streams may look abrupt
+				// to strict peers during normal connection teardown.
 
 				if s.IsReadOnly() {
 					// H3 uni stream начинается с varint stream type (0=control,2,3=qpack)
