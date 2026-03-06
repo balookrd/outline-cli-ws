@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"golang.org/x/net/quic"
@@ -38,6 +39,9 @@ func (h *h3QlogDebugHandler) Handle(_ context.Context, r slog.Record) error {
 		if n <= h3QlogFirstPackets {
 			wsDebugf("h3[qlog]: packet_sent #%d header=%s frames=%s", n, packetHeaderSummary(attrs), packetFrameTypes(attrs))
 		}
+		if packetHasFrameType(attrs, "connection_close") {
+			wsDebugf("h3[qlog]: packet_sent connection_close details=%s", formatAttrMap(attrs))
+		}
 	case "transport:packet_received":
 		h.mu.Lock()
 		h.recv++
@@ -46,8 +50,15 @@ func (h *h3QlogDebugHandler) Handle(_ context.Context, r slog.Record) error {
 		if n <= h3QlogFirstPackets {
 			wsDebugf("h3[qlog]: packet_recv #%d header=%s frames=%s", n, packetHeaderSummary(attrs), packetFrameTypes(attrs))
 		}
+		if packetHasFrameType(attrs, "connection_close") {
+			wsDebugf("h3[qlog]: packet_recv connection_close details=%s", formatAttrMap(attrs))
+		}
 	case "connectivity:packet_dropped":
 		wsDebugf("h3[qlog]: packet_dropped %s", formatAttrMap(attrs))
+	default:
+		if strings.Contains(msg, "connection_closed") {
+			wsDebugf("h3[qlog]: %s %s", msg, formatAttrMap(attrs))
+		}
 	}
 	return nil
 }
@@ -108,6 +119,15 @@ func packetFrameTypes(attrs map[string]string) string {
 		return "[]"
 	}
 	return fmt.Sprintf("%v", types)
+}
+
+func packetHasFrameType(attrs map[string]string, want string) bool {
+	for i := 0; i < 12; i++ {
+		if attrs[fmt.Sprintf("frames[%d].frame_type", i)] == want {
+			return true
+		}
+	}
+	return false
 }
 
 func formatAttrMap(attrs map[string]string) string {
