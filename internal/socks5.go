@@ -7,7 +7,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -81,8 +83,25 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 		// Do not penalize upstream health on per-flow tunnel errors.
 		// These are often destination/client specific (curl aborts, remote TLS reset,
 		// target host policy), while the transport path itself remains healthy.
-		log.Printf("tcp tunnel err (non-health): %v", err)
+		if isExpectedTunnelCloseError(err) {
+			wsDebugf("tcp tunnel closed by peer flow=%d upstream=%q dst=%q err=%v", flowID, up.cfg.Name, dst, err)
+		} else {
+			log.Printf("tcp tunnel err (non-health): %v", err)
+		}
 	}
+}
+
+func isExpectedTunnelCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	return false
 }
 
 func (s *Socks5Server) handleUDPAssociate(ctx context.Context, c net.Conn) {

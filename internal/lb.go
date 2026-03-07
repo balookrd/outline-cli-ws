@@ -123,7 +123,9 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		ok := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
 		cur.mu.Unlock()
 		if ok {
-			log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=sticky", cur.cfg.Name)
+			// Sticky выбор может происходить очень часто (на каждый новый flow),
+			// поэтому оставляем это в debug-логах, чтобы не зашумлять обычные логи.
+			wsDebugf("[lb] selected upstream proto=tcp upstream=%q reason=sticky", cur.cfg.Name)
 			observeSelection(cur.cfg.Name, "tcp")
 			return cur, nil
 		}
@@ -141,7 +143,7 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		curRTT := cur.tcp.rttEWMA
 		cur.mu.Unlock()
 
-		if curOK && curRTT > 0 && bestRTT > 0 {
+		if cur != best && curOK && curRTT > 0 && bestRTT > 0 {
 			if curRTT-bestRTT < lb.sel.MinSwitch {
 				lb.mu.Lock()
 				lb.current = cur
