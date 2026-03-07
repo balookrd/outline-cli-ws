@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type Socks5Server struct {
@@ -99,6 +101,12 @@ func isExpectedTunnelCloseError(err error) bool {
 		return true
 	}
 	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	// coder/websocket often wraps graceful closes as:
+	// "failed to get reader: received close frame: status = StatusNormalClosure ..."
+	status := websocket.CloseStatus(err)
+	if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
 		return true
 	}
 	return false
