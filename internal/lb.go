@@ -607,8 +607,14 @@ func (lb *LoadBalancer) releaseDialSlot() {
 }
 
 func (lb *LoadBalancer) DialWSStreamLimited(ctx context.Context, url string) (WSConn, error) {
+	waitStarted := time.Now()
 	if err := lb.acquireDialSlot(ctx); err != nil {
+		wsDebugf("dial slot acquire failed url=%q waited=%s err=%v", url, time.Since(waitStarted), err)
 		return nil, err
+	}
+	waited := time.Since(waitStarted)
+	if waited > 0 {
+		wsDebugf("dial slot acquired url=%q waited=%s", url, waited)
 	}
 	defer lb.releaseDialSlot()
 	return DialWSStream(ctx, url, lb.fwmark)

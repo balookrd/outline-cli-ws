@@ -57,7 +57,7 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	// Open WS stream to upstream TCP endpoint
 	wsDebugf("socks5 CONNECT picked flow=%d upstream=%q dst=%q", flowID, up.cfg.Name, dst)
 	acquireStarted := time.Now()
-	wsc, err := s.LB.AcquireTCPWS(ctx, up)
+	wsc, err := s.LB.AcquireTCPWSForFlow(ctx, up, flowID)
 	if err != nil {
 		s.LB.ReportTCPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
