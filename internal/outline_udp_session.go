@@ -38,10 +38,11 @@ type OutlineUDPSession struct {
 	wsc WSConn
 	enc net.PacketConn
 
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	subs map[addrKey]chan UDPPayload
 
-	pool sync.Pool // stores *[]byte
+	recvPool sync.Pool // stores *[]byte for received payload copies
+	sendPool sync.Pool // stores *[]byte for outbound packet assembly
 }
 
 func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *UpstreamState) (*OutlineUDPSession, error) {
@@ -70,7 +71,11 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 		enc:    encPC,
 		subs:   make(map[addrKey]chan UDPPayload),
 	}
-	s.pool.New = func() any {
+	s.recvPool.New = func() any {
+		b := make([]byte, 0, 2048)
+		return &b
+	}
+	s.sendPool.New = func() any {
 		b := make([]byte, 0, 2048)
 		return &b
 	}
@@ -129,10 +134,19 @@ func (s *OutlineUDPSession) Send(dst string, payload []byte) error {
 	if ssAddr == nil {
 		return socks.ErrAddressNotSupported
 	}
-	plain := make([]byte, 0, len(ssAddr)+len(payload))
+
+	bufPtr := s.sendPool.Get().(*[]byte)
+	buf := *bufPtr
+	required := len(ssAddr) + len(payload)
+	if cap(buf) < required {
+		buf = make([]byte, 0, required)
+	}
+	plain := buf[:0]
 	plain = append(plain, ssAddr...)
 	plain = append(plain, payload...)
 	_, err := s.enc.WriteTo(plain, dummyAddr{})
+	*bufPtr = plain[:0]
+	s.sendPool.Put(bufPtr)
 	return err
 }
 
@@ -156,7 +170,7 @@ func (s *OutlineUDPSession) readLoop() {
 		}
 
 		// buffer from pool
-		pbPtr := s.pool.Get().(*[]byte)
+		pbPtr := s.recvPool.Get().(*[]byte)
 		pb := *pbPtr
 		if cap(pb) < payloadLen {
 			pb = make([]byte, payloadLen)
@@ -168,13 +182,13 @@ func (s *OutlineUDPSession) readLoop() {
 			B: pb,
 			release: func() {
 				*pbPtr = pb[:0]
-				s.pool.Put(pbPtr)
+				s.recvPool.Put(pbPtr)
 			},
 		}
 
-		s.mu.Lock()
+		s.mu.RLock()
 		ch := s.subs[k]
-		s.mu.Unlock()
+		s.mu.RUnlock()
 
 		if ch != nil {
 			select {
