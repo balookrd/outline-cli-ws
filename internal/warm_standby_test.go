@@ -72,3 +72,28 @@ func TestAcquireTCPWS_UsesStandbyWhenAlive(t *testing.T) {
 		t.Fatalf("expected standby slot cleared after acquire")
 	}
 }
+
+func TestAcquireTCPWSForFlow_RejectsProbedStandby(t *testing.T) {
+	lb := NewLoadBalancer([]UpstreamConfig{{TCPWSS: "wss://example"}}, HealthcheckConfig{Timeout: time.Second}, SelectionConfig{}, ProbeConfig{}, 0)
+	up := lb.pool[0]
+	m := &mockWSConn{}
+	m.enqueueRead(WSMessagePong, nil, nil)
+
+	up.standbyMu.Lock()
+	up.standbyTCP = m
+	up.standbyMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	_, err := lb.AcquireTCPWSForFlow(ctx, up, 1)
+	if err == nil {
+		t.Fatalf("expected fresh dial attempt to fail under short timeout")
+	}
+
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if !closed {
+		t.Fatalf("expected standby conn to be closed when rejected")
+	}
+}
