@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+const tcpRelayCopyBufferSize = 256 * 1024
+
+var tcpRelayBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, tcpRelayCopyBufferSize)
+		return &b
+	},
+}
+
 type relayResult struct {
 	dir   string
 	bytes int64
@@ -34,11 +43,15 @@ func ProxyTCPOverOutlineWS(ctx context.Context, flowID uint64, client net.Conn, 
 
 	wsDebugf("tcp relay start flow=%d upstream=%q dst=%q", flowID, up.Name, dst)
 	go func() {
-		n, e := io.Copy(ssconn, client)
+		bufPtr := tcpRelayBufPool.Get().(*[]byte)
+		defer tcpRelayBufPool.Put(bufPtr)
+		n, e := io.CopyBuffer(ssconn, client, *bufPtr)
 		errC <- relayResult{dir: "client->upstream", bytes: n, err: e}
 	}()
 	go func() {
-		n, e := io.Copy(client, ssconn)
+		bufPtr := tcpRelayBufPool.Get().(*[]byte)
+		defer tcpRelayBufPool.Put(bufPtr)
+		n, e := io.CopyBuffer(client, ssconn, *bufPtr)
 		errC <- relayResult{dir: "upstream->client", bytes: n, err: e}
 	}()
 
