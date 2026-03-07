@@ -15,7 +15,7 @@ type relayResult struct {
 	err   error
 }
 
-func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up UpstreamConfig, dst string) error {
+func ProxyTCPOverOutlineWS(ctx context.Context, flowID uint64, client net.Conn, wsc WSConn, up UpstreamConfig, dst string) error {
 	ssconn, err := newSSTCPConn(ctx, wsc, up, dst)
 	if err != nil {
 		return err
@@ -29,7 +29,7 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	// break remaining reverse-direction traffic.
 	errC := make(chan relayResult, 2)
 
-	wsDebugf("tcp relay start upstream=%q dst=%q", up.Name, dst)
+	wsDebugf("tcp relay start flow=%d upstream=%q dst=%q", flowID, up.Name, dst)
 	go func() {
 		n, e := io.Copy(ssconn, client)
 		errC <- relayResult{dir: "client->upstream", bytes: n, err: e}
@@ -40,7 +40,7 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	}()
 
 	r1 := <-errC
-	wsDebugf("tcp relay side done upstream=%q dst=%q dir=%s bytes=%d err=%v", up.Name, dst, r1.dir, r1.bytes, r1.err)
+	wsDebugf("tcp relay side done flow=%d upstream=%q dst=%q dir=%s bytes=%d err=%v", flowID, up.Name, dst, r1.dir, r1.bytes, r1.err)
 	e1 := r1.err
 	if e1 != nil && !errors.Is(e1, io.EOF) {
 		// Hard error: force teardown so the other copy unblocks.
@@ -62,7 +62,7 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	var e2 error
 	select {
 	case r2 = <-errC:
-		wsDebugf("tcp relay side done upstream=%q dst=%q dir=%s bytes=%d err=%v", up.Name, dst, r2.dir, r2.bytes, r2.err)
+		wsDebugf("tcp relay side done flow=%d upstream=%q dst=%q dir=%s bytes=%d err=%v", flowID, up.Name, dst, r2.dir, r2.bytes, r2.err)
 		e2 = r2.err
 	case <-ctx.Done():
 		_ = ssconn.Close()
@@ -74,14 +74,14 @@ func ProxyTCPOverOutlineWS(ctx context.Context, client net.Conn, wsc WSConn, up 
 	}
 
 	if e1 != nil && !errors.Is(e1, io.EOF) {
-		wsDebugf("tcp relay returning hard error from first side upstream=%q dst=%q dir=%s err=%v", up.Name, dst, r1.dir, e1)
+		wsDebugf("tcp relay returning hard error flow=%d upstream=%q dst=%q dir=%s err=%v", flowID, up.Name, dst, r1.dir, e1)
 		return e1
 	}
 	if e2 != nil && !errors.Is(e2, io.EOF) {
-		wsDebugf("tcp relay returning hard error from second side upstream=%q dst=%q dir=%s err=%v", up.Name, dst, r2.dir, e2)
+		wsDebugf("tcp relay returning hard error flow=%d upstream=%q dst=%q dir=%s err=%v", flowID, up.Name, dst, r2.dir, e2)
 		return e2
 	}
-	wsDebugf("tcp relay completed cleanly upstream=%q dst=%q first_dir=%s first_err=%v second_dir=%s second_err=%v", up.Name, dst, r1.dir, e1, r2.dir, e2)
+	wsDebugf("tcp relay completed cleanly flow=%d upstream=%q dst=%q first_dir=%s first_err=%v second_dir=%s second_err=%v", flowID, up.Name, dst, r1.dir, e1, r2.dir, e2)
 	return nil
 }
 
