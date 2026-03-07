@@ -75,6 +75,30 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 	return lb
 }
 
+func (lb *LoadBalancer) DisableBackgroundProbes() {
+	lb.mu.Lock()
+	pool := append([]*UpstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
+
+	for _, s := range pool {
+		s.mu.Lock()
+		s.tcp.healthy = true
+		s.udp.healthy = true
+		s.tcp.failCount = 0
+		s.udp.failCount = 0
+		s.tcp.successCount = 1
+		s.udp.successCount = 1
+		s.tcp.lastError = nil
+		s.udp.lastError = nil
+		now := time.Now()
+		s.tcp.lastCheckTime = now
+		s.udp.lastCheckTime = now
+		s.tcpCooldownUntil = time.Time{}
+		s.udpCooldownUntil = time.Time{}
+		s.mu.Unlock()
+	}
+}
+
 func (lb *LoadBalancer) PickTCP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(true)
 }

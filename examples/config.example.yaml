@@ -6,6 +6,10 @@ fwmark: 0
 websocket:
   debug: false # verbose websocket transport diagnostics (h1/h2/h3/quic)
 
+# Disable all background health checks/probes/warm-standby.
+# Useful for capturing a clean log for a single curl through SOCKS proxy.
+disable_probes: false
+
 tun:
   device: "" # empty = TUN disabled; set e.g. "tun0" to enable
   mtu: 1500

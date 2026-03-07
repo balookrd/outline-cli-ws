@@ -15,13 +15,14 @@ type Config struct {
 	Listen struct {
 		SOCKS5 string `yaml:"socks5"`
 	} `yaml:"listen"`
-	Tun         TunConfig         `yaml:"tun"`
-	WebSocket   WebSocketConfig   `yaml:"websocket"`
-	Healthcheck HealthcheckConfig `yaml:"healthcheck"`
-	Selection   SelectionConfig   `yaml:"selection"`
-	Upstreams   []UpstreamConfig  `yaml:"upstreams"`
-	Probe       ProbeConfig       `yaml:"probe"`
-	Fwmark      uint32            `yaml:"fwmark"` // 0 = disabled
+	Tun           TunConfig         `yaml:"tun"`
+	WebSocket     WebSocketConfig   `yaml:"websocket"`
+	Healthcheck   HealthcheckConfig `yaml:"healthcheck"`
+	Selection     SelectionConfig   `yaml:"selection"`
+	Upstreams     []UpstreamConfig  `yaml:"upstreams"`
+	Probe         ProbeConfig       `yaml:"probe"`
+	DisableProbes bool              `yaml:"disable_probes"`
+	Fwmark        uint32            `yaml:"fwmark"` // 0 = disabled
 }
 
 type TunConfig struct {

@@ -17,8 +17,10 @@ import (
 func main() {
 	var cfgPath string
 	var metricsAddr string
+	var noProbes bool
 	flag.StringVar(&cfgPath, "c", "config.yaml", "config path")
 	flag.StringVar(&metricsAddr, "metrics", "", "prometheus metrics listen address, e.g. :9100")
+	flag.BoolVar(&noProbes, "no-probes", false, "disable background health checks/probes/warm-standby for clean per-request logs")
 	flag.Parse()
 
 	cfg, err := outlinews.LoadConfig(cfgPath)
@@ -46,9 +48,15 @@ func main() {
 		log.Printf("Prometheus metrics listening on %s", metricsAddr)
 	}
 
-	// Health-check loop
-	go lb.RunHealthChecks(ctx)
-	go lb.RunWarmStandby(ctx)
+	disableProbes := cfg.DisableProbes || noProbes
+	if disableProbes {
+		lb.DisableBackgroundProbes()
+		log.Printf("background probes are disabled (disable_probes=%v, -no-probes=%v)", cfg.DisableProbes, noProbes)
+	} else {
+		// Health-check loop
+		go lb.RunHealthChecks(ctx)
+		go lb.RunWarmStandby(ctx)
+	}
 
 	socksAddr := cfg.Listen.SOCKS5
 	socksEnabled := socksAddr != ""
