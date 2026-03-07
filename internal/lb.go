@@ -59,6 +59,9 @@ type LoadBalancer struct {
 	current     *UpstreamState
 	stickyUntil time.Time
 
+	// suppresses repetitive unchanged selection log lines by protocol.
+	lastSelectionLog map[string]string
+
 	dialSem chan struct{}
 }
 
@@ -70,7 +73,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
+	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}}
 	lb.dialSem = make(chan struct{}, 32) // default parallel dials
 	return lb
 }
@@ -105,6 +108,20 @@ func (lb *LoadBalancer) PickTCP() (*UpstreamState, error) {
 
 func (lb *LoadBalancer) PickUDP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(false)
+}
+
+func (lb *LoadBalancer) logSelectionIfChanged(proto, upstream, reason string) {
+	k := upstream + "|" + reason
+	lb.mu.Lock()
+	prev := lb.lastSelectionLog[proto]
+	if prev == k {
+		lb.mu.Unlock()
+		return
+	}
+	lb.lastSelectionLog[proto] = k
+	lb.mu.Unlock()
+
+	log.Printf("[lb] selected upstream proto=%s upstream=%q reason=%s", proto, upstream, reason)
 }
 
 func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
@@ -149,7 +166,8 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 				lb.current = cur
 				lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 				lb.mu.Unlock()
-				log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=hysteresis current_rtt=%s candidate_rtt=%s min_switch=%s", cur.cfg.Name, curRTT, bestRTT, lb.sel.MinSwitch)
+				lb.logSelectionIfChanged("tcp", cur.cfg.Name, "hysteresis")
+				wsDebugf("[lb] hysteresis details upstream=%q current_rtt=%s candidate_rtt=%s min_switch=%s", cur.cfg.Name, curRTT, bestRTT, lb.sel.MinSwitch)
 				observeSelection(cur.cfg.Name, "tcp")
 				return cur, nil
 			}
@@ -161,10 +179,10 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		lb.current = best
 		lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 		lb.mu.Unlock()
-		log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=best-candidate", best.cfg.Name)
+		lb.logSelectionIfChanged("tcp", best.cfg.Name, "best-candidate")
 		observeSelection(best.cfg.Name, "tcp")
 	} else {
-		log.Printf("[lb] selected upstream proto=udp upstream=%q reason=best-candidate", best.cfg.Name)
+		lb.logSelectionIfChanged("udp", best.cfg.Name, "best-candidate")
 		observeSelection(best.cfg.Name, "udp")
 	}
 
