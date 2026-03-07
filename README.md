@@ -216,6 +216,18 @@ cp examples/config.example.yaml config.yaml
 ./outline-cli-ws -c config.yaml
 ```
 
+For single-request troubleshooting, disable background probes/health checks to keep logs clean:
+
+```
+./outline-cli-ws -c config.yaml -no-probes
+```
+
+Equivalent YAML option:
+
+```yaml
+disable_probes: true
+```
+
 SOCKS5 in `examples/config.example.yaml`:
 
 ```
