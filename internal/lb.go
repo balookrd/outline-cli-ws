@@ -458,13 +458,30 @@ func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
 	return base
 }
 
+func shouldUseH3Healthcheck(rawurl string) bool {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return false
+	}
+	_, _, tryH3, h3Only, _ := parseTransportHints(u.Query())
+	return tryH3 || h3Only
+}
+
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	var (
+		rtt time.Duration
+		err error
+	)
+	if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
+		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
+	} else {
+		rtt, err = ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	}
 	if err != nil {
 		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
 	}
@@ -500,7 +517,15 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	var (
+		rtt time.Duration
+		err error
+	)
+	if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
+		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
+	} else {
+		rtt, err = ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	}
 	if err != nil {
 		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
 	}

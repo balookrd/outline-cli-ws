@@ -96,3 +96,21 @@ func TestPickUDP_NoSticky(t *testing.T) {
 		t.Fatalf("expected best u1")
 	}
 }
+
+func TestShouldUseH3Healthcheck(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{raw: "wss://example.com/tcp?h3=1", want: true},
+		{raw: "wss://example.com/tcp?http3=only", want: true},
+		{raw: "wss://example.com/tcp?h2=only", want: false},
+		{raw: "wss://example.com/tcp", want: false},
+		{raw: ":://bad-url", want: false},
+	}
+	for _, tc := range cases {
+		if got := shouldUseH3Healthcheck(tc.raw); got != tc.want {
+			t.Fatalf("shouldUseH3Healthcheck(%q)=%v want %v", tc.raw, got, tc.want)
+		}
+	}
+}

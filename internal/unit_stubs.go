@@ -26,6 +26,10 @@ func ProbeUDPQuality(ctx context.Context, up UpstreamConfig, target string, dnsN
 	return 0, ErrNotImplemented
 }
 
+func ProbeH3ExtendedConnect(ctx context.Context, rawurl string) (time.Duration, error) {
+	return 0, ErrNotImplemented
+}
+
 // RunTunNative is disabled in unit build (requires TUN + gVisor).
 func RunTunNative(ctx context.Context, cfg TunConfig, lb *LoadBalancer) error {
 	return ErrNotImplemented
