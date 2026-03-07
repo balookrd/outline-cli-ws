@@ -16,11 +16,14 @@ type relayResult struct {
 }
 
 func ProxyTCPOverOutlineWS(ctx context.Context, flowID uint64, client net.Conn, wsc WSConn, up UpstreamConfig, dst string) error {
+	wsDebugf("tcp relay init flow=%d upstream=%q dst=%q", flowID, up.Name, dst)
 	ssconn, err := newSSTCPConn(ctx, wsc, up, dst)
 	if err != nil {
+		wsDebugf("tcp relay init failed flow=%d upstream=%q dst=%q err=%v", flowID, up.Name, dst, err)
 		return err
 	}
 	defer ssconn.Close()
+	wsDebugf("tcp relay init done flow=%d upstream=%q dst=%q", flowID, up.Name, dst)
 
 	// Full-duplex relay.
 	//
