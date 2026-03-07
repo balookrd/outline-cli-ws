@@ -40,6 +40,7 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		return nil, err
 	}
 	upstream, proto := upstreamFromURL(u)
+	uDial := stripHealthcheckQueryParams(u)
 
 	// Shared dialer with fwmark support.
 	d := &net.Dialer{
@@ -65,21 +66,21 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 
 	tryH2, h2Only, tryH3, h3Only, connectOnly := parseTransportHints(u.Query())
-	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v connectOnly=%v", u.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only, connectOnly)
+	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v connectOnly=%v", uDial.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only, connectOnly)
 
 	if tryH3 && isWebSocketLikeScheme(u.Scheme) {
-		wsDebugf("attempt h3/rfc9220 dial url=%q", u.Redacted())
-		h3c, h3err := dialRFC9220(ctx, u)
+		wsDebugf("attempt h3/rfc9220 dial url=%q", uDial.Redacted())
+		h3c, h3err := dialRFC9220(ctx, uDial)
 		if h3err == nil {
-			wsDebugf("h3/rfc9220 dial succeeded url=%q", u.Redacted())
+			wsDebugf("h3/rfc9220 dial succeeded url=%q", uDial.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h3c, nil
 		}
-		wsDebugf("h3/rfc9220 dial failed url=%q err=%v", u.Redacted(), h3err)
+		wsDebugf("h3/rfc9220 dial failed url=%q err=%v", uDial.Redacted(), h3err)
 		if h3Only {
 			return nil, fmt.Errorf("h3-only connect failed: %w", h3err)
 		}
-		wsDebugf("fallback to h2/http1 after h3 failure url=%q", u.Redacted())
+		wsDebugf("fallback to h2/http1 after h3 failure url=%q", uDial.Redacted())
 		if !tryH2 {
 			tryH2 = true
 		}
@@ -91,26 +92,26 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		if !isWebSocketLikeScheme(u.Scheme) {
 			return nil, fmt.Errorf("h2-only mode requires ws/wss URL, got scheme=%q", u.Scheme)
 		}
-		wsDebugf("attempt h2/rfc8441 dial url=%q", u.Redacted())
-		h2c, h2err := dialRFC8441(ctx, u, tr)
+		wsDebugf("attempt h2/rfc8441 dial url=%q", uDial.Redacted())
+		h2c, h2err := dialRFC8441(ctx, uDial, tr)
 		if h2err == nil {
-			wsDebugf("h2/rfc8441 dial succeeded url=%q", u.Redacted())
+			wsDebugf("h2/rfc8441 dial succeeded url=%q", uDial.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
-		wsDebugf("h2-only dial failed url=%q err=%v", u.Redacted(), h2err)
+		wsDebugf("h2-only dial failed url=%q err=%v", uDial.Redacted(), h2err)
 		return nil, fmt.Errorf("h2-only connect failed: %w", h2err)
 	}
 
 	if tryH2 && isWebSocketLikeScheme(u.Scheme) {
-		wsDebugf("attempt h2/rfc8441 dial url=%q", u.Redacted())
-		h2c, h2err := dialRFC8441(ctx, u, tr)
+		wsDebugf("attempt h2/rfc8441 dial url=%q", uDial.Redacted())
+		h2c, h2err := dialRFC8441(ctx, uDial, tr)
 		if h2err == nil {
-			wsDebugf("h2/rfc8441 dial succeeded url=%q", u.Redacted())
+			wsDebugf("h2/rfc8441 dial succeeded url=%q", uDial.Redacted())
 			observeDial(upstream, proto, time.Since(start))
 			return h2c, nil
 		}
-		wsDebugf("h2/rfc8441 dial failed url=%q err=%v", u.Redacted(), h2err)
+		wsDebugf("h2/rfc8441 dial failed url=%q err=%v", uDial.Redacted(), h2err)
 		// Only fall back on "not supported" style errors; otherwise surface.
 		if !errors.Is(h2err, errRFC8441NotSupported) {
 			return nil, h2err
@@ -123,13 +124,13 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 	}
 
 	// Classic websocket (HTTP/1.1 upgrade).
-	wsDebugf("attempt h1 websocket upgrade url=%q", u.Redacted())
-	c, err := dialCoderWebSocket(ctx, u.String(), tr)
+	wsDebugf("attempt h1 websocket upgrade url=%q", uDial.Redacted())
+	c, err := dialCoderWebSocket(ctx, uDial.String(), tr)
 	if err != nil {
-		wsDebugf("h1 websocket upgrade failed url=%q err=%v", u.Redacted(), err)
+		wsDebugf("h1 websocket upgrade failed url=%q err=%v", uDial.Redacted(), err)
 		return nil, err
 	}
-	wsDebugf("h1 websocket upgrade succeeded url=%q", u.Redacted())
+	wsDebugf("h1 websocket upgrade succeeded url=%q", uDial.Redacted())
 	observeDial(upstream, proto, time.Since(start))
 	return c, nil
 }
@@ -150,6 +151,19 @@ func parseTransportHints(q url.Values) (tryH2, h2Only, tryH3, h3Only, connectOnl
 		connectOnly = true
 	}
 	return
+}
+
+func stripHealthcheckQueryParams(u *url.URL) *url.URL {
+	if u == nil {
+		return nil
+	}
+	clone := *u
+	q := clone.Query()
+	q.Del("hc_path")
+	q.Del("health_path")
+	q.Del("test_path")
+	clone.RawQuery = q.Encode()
+	return &clone
 }
 
 func isWebSocketLikeScheme(s string) bool {
