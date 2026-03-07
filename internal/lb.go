@@ -123,6 +123,7 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		ok := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
 		cur.mu.Unlock()
 		if ok {
+			log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=sticky", cur.cfg.Name)
 			observeSelection(cur.cfg.Name, "tcp")
 			return cur, nil
 		}
@@ -146,6 +147,8 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 				lb.current = cur
 				lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 				lb.mu.Unlock()
+				log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=hysteresis current_rtt=%s candidate_rtt=%s min_switch=%s", cur.cfg.Name, curRTT, bestRTT, lb.sel.MinSwitch)
+				observeSelection(cur.cfg.Name, "tcp")
 				return cur, nil
 			}
 		}
@@ -156,8 +159,10 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		lb.current = best
 		lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 		lb.mu.Unlock()
+		log.Printf("[lb] selected upstream proto=tcp upstream=%q reason=best-candidate", best.cfg.Name)
 		observeSelection(best.cfg.Name, "tcp")
 	} else {
+		log.Printf("[lb] selected upstream proto=udp upstream=%q reason=best-candidate", best.cfg.Name)
 		observeSelection(best.cfg.Name, "udp")
 	}
 
