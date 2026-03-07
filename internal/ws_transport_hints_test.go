@@ -85,3 +85,21 @@ func TestIsWebSocketLikeScheme(t *testing.T) {
 		}
 	}
 }
+
+func TestStripHealthcheckQueryParams(t *testing.T) {
+	u, err := url.Parse("wss://edge.example.com/tcp?h3=1&hc_path=%2Fhealth%2Ftcp&origin=https%3A%2F%2Fclient&test_path=%2Fx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := stripHealthcheckQueryParams(u)
+	q := out.Query()
+	if q.Get("hc_path") != "" || q.Get("health_path") != "" || q.Get("test_path") != "" {
+		t.Fatalf("healthcheck control params must be stripped, got query=%q", out.RawQuery)
+	}
+	if q.Get("h3") != "1" {
+		t.Fatalf("h3 hint must be preserved")
+	}
+	if q.Get("origin") == "" {
+		t.Fatalf("origin must be preserved")
+	}
+}

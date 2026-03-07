@@ -55,9 +55,8 @@ const (
 
 type h3wsStream struct {
 	s               *quic.Stream
-	qc              *quic.Conn
-	ep              *quic.Endpoint
 	stopPeerDrainer context.CancelFunc
+	readBuf         []byte
 }
 
 type h3PeerObservations struct {
@@ -109,35 +108,68 @@ func (o *h3PeerObservations) waitSettings(timeout time.Duration) {
 	}
 }
 
-func (s *h3wsStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
-func (s *h3wsStream) Write(p []byte) (int, error) {
-	n, err := s.s.Write(p)
-	if err != nil {
-		return n, err
+func (s *h3wsStream) Read(p []byte) (int, error) {
+	for {
+		if len(s.readBuf) > 0 {
+			n := copy(p, s.readBuf)
+			s.readBuf = s.readBuf[n:]
+			return n, nil
+		}
+
+		ft, err := readVarint(s.s)
+		if err != nil {
+			return 0, err
+		}
+		n, err := readVarint(s.s)
+		if err != nil {
+			return 0, err
+		}
+
+		payload := make([]byte, n)
+		if _, err := io.ReadFull(s.s, payload); err != nil {
+			return 0, err
+		}
+
+		if ft != h3FrameData {
+			return 0, fmt.Errorf("h3 websocket stream protocol error: non-DATA frame type=%d", ft)
+		}
+		s.readBuf = payload
 	}
-	if n > 0 {
+}
+func (s *h3wsStream) Write(p []byte) (int, error) {
+	frame := appendVarint(nil, h3FrameData)
+	frame = appendVarint(frame, uint64(len(p)))
+	frame = append(frame, p...)
+
+	remaining := frame
+	for len(remaining) > 0 {
+		n, err := s.s.Write(remaining)
+		if err != nil {
+			return 0, err
+		}
+		if n <= 0 {
+			return 0, io.ErrShortWrite
+		}
+		remaining = remaining[n:]
+	}
+
+	if len(p) > 0 {
 		// QUIC stream writes can be buffered; flush eagerly so early payload
 		// bytes are not stranded when callers promptly close after writing.
 		if ferr := s.s.Flush(); ferr != nil {
-			return n, ferr
+			return 0, ferr
 		}
 	}
-	return n, nil
+	return len(p), nil
 }
 func (s *h3wsStream) Close() error {
 	if s.stopPeerDrainer != nil {
 		s.stopPeerDrainer()
 	}
-	// Gracefully half-close the request/data stream.
-	//
-	// For RFC9220 this stream carries WebSocket data bidirectionally; forcing
-	// CloseRead() emits STOP_SENDING and can look like abrupt teardown in peer
-	// logs even after a normal WS close handshake.
-	s.s.CloseWrite()
-	_ = s.qc.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	_ = s.ep.Close(ctx)
+	// Do not signal FIN/STOP_SENDING here.
+	// RFC9220 WebSocket closure is carried by WS CLOSE frames inside H3 DATA.
+	// Sending QUIC stream finalization too early can terminate upload-side
+	// before the application-level close handshake fully propagates.
 	return nil
 }
 
@@ -308,7 +340,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	}
 	wsDebugf("h3: websocket CONNECT established")
 	h3Established = true
-	return newFramedWSConn(&h3wsStream{s: st, qc: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
+	return newFramedWSConn(&h3wsStream{s: st, stopPeerDrainer: peerDrainCancel}), nil
 }
 
 func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.CancelFunc {

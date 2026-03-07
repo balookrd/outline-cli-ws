@@ -75,6 +75,30 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 	return lb
 }
 
+func (lb *LoadBalancer) DisableBackgroundProbes() {
+	lb.mu.Lock()
+	pool := append([]*UpstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
+
+	for _, s := range pool {
+		s.mu.Lock()
+		s.tcp.healthy = true
+		s.udp.healthy = true
+		s.tcp.failCount = 0
+		s.udp.failCount = 0
+		s.tcp.successCount = 1
+		s.udp.successCount = 1
+		s.tcp.lastError = nil
+		s.udp.lastError = nil
+		now := time.Now()
+		s.tcp.lastCheckTime = now
+		s.udp.lastCheckTime = now
+		s.tcpCooldownUntil = time.Time{}
+		s.udpCooldownUntil = time.Time{}
+		s.mu.Unlock()
+	}
+}
+
 func (lb *LoadBalancer) PickTCP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(true)
 }
@@ -434,13 +458,30 @@ func wsDialTimeoutForURL(base time.Duration, rawurl string) time.Duration {
 	return base
 }
 
+func shouldUseH3Healthcheck(rawurl string) bool {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return false
+	}
+	_, _, tryH3, h3Only, _ := parseTransportHints(u.Query())
+	return tryH3 || h3Only
+}
+
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	var (
+		rtt time.Duration
+		err error
+	)
+	if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
+		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
+	} else {
+		rtt, err = ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	}
 	if err != nil {
 		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
 	}
@@ -476,7 +517,15 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	rtt, err := ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	var (
+		rtt time.Duration
+		err error
+	)
+	if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
+		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
+	} else {
+		rtt, err = ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	}
 	if err != nil {
 		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
 	}
@@ -607,8 +656,14 @@ func (lb *LoadBalancer) releaseDialSlot() {
 }
 
 func (lb *LoadBalancer) DialWSStreamLimited(ctx context.Context, url string) (WSConn, error) {
+	waitStarted := time.Now()
 	if err := lb.acquireDialSlot(ctx); err != nil {
+		wsDebugf("dial slot acquire failed url=%q waited=%s err=%v", url, time.Since(waitStarted), err)
 		return nil, err
+	}
+	waited := time.Since(waitStarted)
+	if waited > 0 {
+		wsDebugf("dial slot acquired url=%q waited=%s", url, waited)
 	}
 	defer lb.releaseDialSlot()
 	return DialWSStream(ctx, url, lb.fwmark)

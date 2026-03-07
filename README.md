@@ -153,6 +153,27 @@ Behavior:
 
 Typical use case: lower handshake latency and better resilience on lossy/mobile links where QUIC performs better than TCP.
 
+### H3 health-check (staged)
+
+For upstreams with H3 hints (`h3=1`, `h3=only`, `http3=1`, `rfc9220=1`, etc.), health-check uses a dedicated RFC9220 probe with 3 stages:
+
+1. QUIC handshake is successful
+2. Peer H3 control stream is received and `SETTINGS_ENABLE_CONNECT_PROTOCOL=1`
+3. Extended CONNECT returns `:status=200`
+
+By design, this probe does **not** send a WebSocket CLOSE frame over the real data-path stream.
+
+If your server exposes a dedicated health route, pass it in the upstream URL query:
+
+```yaml
+upstreams:
+  - name: "h3-edge"
+    tcp_wss: "wss://edge.example.com/tcp?h3=1&hc_path=/health/tcp"
+    udp_wss: "wss://edge.example.com/udp?h3=1&hc_path=/health/udp"
+```
+
+Supported aliases for dedicated probe path are `hc_path`, `health_path`, and `test_path`.
+
 ---
 
 ## 4️⃣ Strict Mode Summary
@@ -214,6 +235,18 @@ go build -o outline-cli-ws ./cmd/outline-cli-ws
 ```
 cp examples/config.example.yaml config.yaml
 ./outline-cli-ws -c config.yaml
+```
+
+For single-request troubleshooting, disable background probes/health checks to keep logs clean:
+
+```
+./outline-cli-ws -c config.yaml -no-probes
+```
+
+Equivalent YAML option:
+
+```yaml
+disable_probes: true
 ```
 
 SOCKS5 in `examples/config.example.yaml`:

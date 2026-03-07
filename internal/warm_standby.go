@@ -40,6 +40,23 @@ func wsAliveCheck(ctx context.Context, c WSConn) bool {
 // AcquireTCPWS отдаёт прогретый WS (если есть) или делает Dial.
 // Если взяли прогретый — слот освобождается и будет догрет снова.
 func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *UpstreamState) (WSConn, error) {
+	return lb.acquireTCPWS(ctx, up, 0)
+}
+
+// AcquireTCPWSForFlow is identical to AcquireTCPWS but adds flow-scoped debug logs.
+func (lb *LoadBalancer) AcquireTCPWSForFlow(ctx context.Context, up *UpstreamState, flowID uint64) (WSConn, error) {
+	return lb.acquireTCPWS(ctx, up, flowID)
+}
+
+func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flowID uint64) (WSConn, error) {
+	logf := func(format string, args ...any) {
+		if flowID > 0 {
+			wsDebugf("flow=%d "+format, append([]any{flowID}, args...)...)
+			return
+		}
+		wsDebugf(format, args...)
+	}
+
 	// 1) попробуем взять прогретый
 	up.standbyMu.Lock()
 	c := up.standbyTCP
@@ -47,17 +64,42 @@ func (lb *LoadBalancer) AcquireTCPWS(ctx context.Context, up *UpstreamState) (WS
 	up.standbyMu.Unlock()
 
 	if c != nil {
+		logf("acquire tcp ws: got standby candidate upstream=%q", up.cfg.Name)
 		checkCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		aliveStarted := time.Now()
 		ok := wsAliveCheck(checkCtx, c)
 		cancel()
-		if ok {
+		logf("acquire tcp ws: standby alive-check upstream=%q ok=%v elapsed=%s", up.cfg.Name, ok, time.Since(aliveStarted))
+
+		// Strict flow policy:
+		// For real user flows (flowID>0), even successful active probing marks
+		// standby as "probed" and we force a fresh dial. This avoids handing a
+		// potentially closing/half-stale stream to user traffic.
+		if flowID > 0 {
+			reason := "probed"
+			if !ok {
+				reason = "not-alive"
+			}
+			_ = c.Close(WSStatusNormalClosure, "standby-rejected")
+			logf("acquire tcp ws: standby rejected upstream=%q reason=%s", up.cfg.Name, reason)
+		} else if ok {
 			return c, nil
+		} else {
+			_ = c.Close(WSStatusNormalClosure, "stale-standby")
+			logf("acquire tcp ws: standby rejected upstream=%q reason=not-alive", up.cfg.Name)
 		}
-		_ = c.Close(WSStatusNormalClosure, "stale-standby")
 	}
 
 	// 2) иначе — обычный dial
-	return lb.DialWSStreamLimited(ctx, up.cfg.TCPWSS)
+	dialStarted := time.Now()
+	logf("acquire tcp ws: dialing fresh upstream=%q", up.cfg.Name)
+	conn, err := lb.DialWSStreamLimited(ctx, up.cfg.TCPWSS)
+	if err != nil {
+		logf("acquire tcp ws: fresh dial failed upstream=%q elapsed=%s err=%v", up.cfg.Name, time.Since(dialStarted), err)
+		return nil, err
+	}
+	logf("acquire tcp ws: fresh dial done upstream=%q elapsed=%s", up.cfg.Name, time.Since(dialStarted))
+	return conn, nil
 }
 
 // EnsureStandbyTCP гарантирует, что у апстрима есть прогретый TCP WS (если он healthy и не в cooldown).

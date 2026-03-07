@@ -3,6 +3,7 @@
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -60,14 +61,14 @@ func TestRFC9220ClientToWSAndBack(t *testing.T) {
 	defer serverSide.Close()
 
 	clientWS := newFramedWSConn(clientSide)
-	serverWS := newFramedWSConn(serverSide)
+	serverBR := bufio.NewReader(serverSide)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	serverErr := make(chan error, 1)
 	go func() {
-		typ, payload, err := serverWS.Read(ctx)
+		typ, payload, _, err := readFrame(serverBR, true /* expect masked client frames */)
 		if err != nil {
 			serverErr <- err
 			return
@@ -80,7 +81,13 @@ func TestRFC9220ClientToWSAndBack(t *testing.T) {
 			serverErr <- fmt.Errorf("unexpected payload: %q", payload)
 			return
 		}
-		serverErr <- serverWS.Write(ctx, WSMessageBinary, []byte("ws->client"))
+		frame, err := buildFrame(WSMessageBinary, []byte("ws->client"), false /* unmasked server frame */)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_, err = serverSide.Write(frame)
+		serverErr <- err
 	}()
 
 	if err := clientWS.Write(ctx, WSMessageBinary, []byte("client->ws")); err != nil {

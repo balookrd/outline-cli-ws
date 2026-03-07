@@ -124,6 +124,8 @@ type framedWSConn struct {
 	br *bufio.Reader
 	s  io.ReadWriteCloser
 	mu sync.Mutex // serialize writes; multiple goroutines may write (data + auto pong/close)
+	// closeSent gates writes after we send a WS close frame.
+	closeSent bool
 }
 
 func newFramedWSConn(s io.ReadWriteCloser) *framedWSConn {
@@ -136,6 +138,36 @@ func newFramedWSConn(s io.ReadWriteCloser) *framedWSConn {
 func (c *framedWSConn) writeRaw(frame []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closeSent {
+		return io.EOF
+	}
+
+	remaining := frame
+	for len(remaining) > 0 {
+		n, err := c.s.Write(remaining)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		remaining = remaining[n:]
+	}
+	return nil
+}
+
+func (c *framedWSConn) sendClose(payload []byte) error {
+	frame, err := buildFrame(WSMessageClose, payload, true /* mask */)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closeSent {
+		return nil
+	}
+	c.closeSent = true
 
 	remaining := frame
 	for len(remaining) > 0 {
@@ -159,7 +191,7 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 			return 0, nil, err
 		}
 
-		typ, payload, fin, err := readFrame(c.br)
+		typ, payload, fin, err := readFrame(c.br, false /* expect unmasked server frames */)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -175,22 +207,18 @@ func (c *framedWSConn) Read(ctx context.Context) (WSMessageType, []byte, error) 
 			// Echo close (best-effort) and stop.
 			// If peer sent a close code/reason, preserve it.
 			// Send back the same payload.
-			if frame, err := buildFrame(WSMessageClose, payload, true /* mask */); err == nil {
-				_ = c.writeRaw(frame)
-			}
+			_ = c.sendClose(payload)
 			_ = c.s.Close()
 			return 0, nil, io.EOF
 		case WSMessageContinuation:
-			// Some non-compliant intermediaries emit opcode=continuation as the
-			// first fragment. Tolerate it as a binary message to avoid tearing
-			// down an otherwise healthy tunnel.
-			wsDebugf("ws framing: treating unexpected continuation as binary first fragment")
-			return c.readFragmentedMessage(ctx, WSMessageBinary, payload, fin)
-		default:
+			return 0, nil, fmt.Errorf("websocket protocol error: unexpected continuation frame")
+		case WSMessageText, WSMessageBinary:
 			if fin {
 				return typ, payload, nil
 			}
 			return c.readFragmentedMessage(ctx, typ, payload, fin)
+		default:
+			return 0, nil, fmt.Errorf("websocket protocol error: reserved opcode=%d", typ)
 		}
 	}
 }
@@ -206,7 +234,7 @@ func (c *framedWSConn) readFragmentedMessage(ctx context.Context, firstType WSMe
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err
 		}
-		op2, p2, fin2, err := readFrame(c.br)
+		op2, p2, fin2, err := readFrame(c.br, false /* expect unmasked server frames */)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -217,7 +245,8 @@ func (c *framedWSConn) readFragmentedMessage(ctx context.Context, firstType WSMe
 		case WSMessagePong:
 			continue
 		case WSMessageClose:
-			_ = c.Close(WSStatusNormalClosure, "")
+			_ = c.sendClose(p2)
+			_ = c.s.Close()
 			return 0, nil, io.EOF
 		case WSMessageContinuation:
 			buf = append(buf, p2...)
@@ -250,7 +279,7 @@ func (c *framedWSConn) Close(code WSStatusCode, reason string) error {
 		binary.BigEndian.PutUint16(payload[:2], uint16(code))
 		copy(payload[2:], []byte(reason))
 	}
-	_ = c.Write(context.Background(), WSMessageClose, payload)
+	_ = c.sendClose(payload)
 	// Give the peer a moment to read the close (best-effort).
 	_ = time.AfterFunc(150*time.Millisecond, func() { _ = c.s.Close() })
 	return nil
@@ -258,7 +287,7 @@ func (c *framedWSConn) Close(code WSStatusCode, reason string) error {
 
 // ---- framing helpers ----
 
-func readFrame(r *bufio.Reader) (typ WSMessageType, payload []byte, fin bool, err error) {
+func readFrame(r *bufio.Reader, expectMasked bool) (typ WSMessageType, payload []byte, fin bool, err error) {
 	b0, err := r.ReadByte()
 	if err != nil {
 		return 0, nil, false, err
@@ -272,6 +301,12 @@ func readFrame(r *bufio.Reader) (typ WSMessageType, payload []byte, fin bool, er
 	op := WSMessageType(b0 & 0x0F)
 
 	masked := (b1 & 0x80) != 0
+	if expectMasked && !masked {
+		return 0, nil, false, fmt.Errorf("websocket protocol error: expected masked frame")
+	}
+	if !expectMasked && masked {
+		return 0, nil, false, fmt.Errorf("websocket protocol error: server frame must not be masked")
+	}
 	ln := int(b1 & 0x7F)
 
 	var plen uint64

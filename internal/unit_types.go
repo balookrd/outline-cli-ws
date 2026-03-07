@@ -59,12 +59,13 @@ type WebSocketConfig struct {
 }
 
 type Config struct {
-	Upstreams    []UpstreamConfig
-	Healthcheck  HealthcheckConfig
-	Selection    SelectionConfig
-	Probe        ProbeConfig
-	Fwmark       uint32
-	Tun          TunConfig
-	WebSocket    WebSocketConfig
-	Socks5Listen string
+	Upstreams     []UpstreamConfig
+	Healthcheck   HealthcheckConfig
+	Selection     SelectionConfig
+	Probe         ProbeConfig
+	DisableProbes bool
+	Fwmark        uint32
+	Tun           TunConfig
+	WebSocket     WebSocketConfig
+	Socks5Listen  string
 }

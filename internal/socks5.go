@@ -7,12 +7,15 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
 type Socks5Server struct {
 	LB *LoadBalancer
 }
+
+var socks5ConnectFlowSeq uint64
 
 func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
@@ -42,7 +45,8 @@ func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 }
 
 func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string) {
-	wsDebugf("socks5 CONNECT requested dst=%q", dst)
+	flowID := atomic.AddUint64(&socks5ConnectFlowSeq, 1)
+	wsDebugf("socks5 CONNECT requested flow=%d dst=%q", flowID, dst)
 	up, err := s.LB.PickTCP()
 	if err != nil {
 		s.LB.ReportTCPFailure(up, err)
@@ -51,23 +55,28 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 	}
 
 	// Open WS stream to upstream TCP endpoint
-	wsDebugf("socks5 CONNECT picked upstream=%q dst=%q", up.cfg.Name, dst)
-	wsc, err := s.LB.AcquireTCPWS(ctx, up)
+	wsDebugf("socks5 CONNECT picked flow=%d upstream=%q dst=%q", flowID, up.cfg.Name, dst)
+	acquireStarted := time.Now()
+	wsc, err := s.LB.AcquireTCPWSForFlow(ctx, up, flowID)
 	if err != nil {
 		s.LB.ReportTCPFailure(up, err)
 		_ = socks5Reply(c, 0x04, "0.0.0.0:0")
 		return
 	}
+	wsDebugf("socks5 CONNECT acquired ws flow=%d upstream=%q dst=%q elapsed=%s", flowID, up.cfg.Name, dst, time.Since(acquireStarted))
 	defer wsc.Close(WSStatusNormalClosure, "close")
 
 	// Reply success (bound addr can be 0.0.0.0:0 for our proxy)
 	if err := socks5Reply(c, 0x00, "0.0.0.0:0"); err != nil {
+		wsDebugf("socks5 CONNECT reply failed flow=%d upstream=%q dst=%q err=%v", flowID, up.cfg.Name, dst, err)
 		return
 	}
 
+	wsDebugf("socks5 CONNECT reply sent flow=%d upstream=%q dst=%q", flowID, up.cfg.Name, dst)
+
 	// Tunnel: local TCP <-> Shadowsocks-over-WS
-	err = ProxyTCPOverOutlineWS(ctx, c, wsc, up.cfg, dst)
-	wsDebugf("socks5 CONNECT finished upstream=%q dst=%q err=%v", up.cfg.Name, dst, err)
+	err = ProxyTCPOverOutlineWS(ctx, flowID, c, wsc, up.cfg, dst)
+	wsDebugf("socks5 CONNECT finished flow=%d upstream=%q dst=%q err=%v", flowID, up.cfg.Name, dst, err)
 	if err != nil && !errors.Is(err, io.EOF) {
 		// Do not penalize upstream health on per-flow tunnel errors.
 		// These are often destination/client specific (curl aborts, remote TLS reset,
