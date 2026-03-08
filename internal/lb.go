@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const repeatedSelectionLogInterval = 30 * time.Second
+
 type hcState struct {
 	healthy      bool
 	failCount    int
@@ -60,7 +62,8 @@ type LoadBalancer struct {
 	stickyUntil time.Time
 
 	// suppresses repetitive unchanged selection log lines by protocol.
-	lastSelectionLog map[string]string
+	lastSelectionLog   map[string]string
+	lastSelectionLogAt map[string]time.Time
 
 	dialSem chan struct{}
 }
@@ -73,7 +76,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}}
+	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}, lastSelectionLogAt: map[string]time.Time{}}
 	lb.dialSem = make(chan struct{}, 32) // default parallel dials
 	return lb
 }
@@ -111,14 +114,17 @@ func (lb *LoadBalancer) PickUDP() (*UpstreamState, error) {
 }
 
 func (lb *LoadBalancer) logSelectionIfChanged(proto, upstream, reason string) {
+	now := time.Now()
 	k := upstream + "|" + reason
 	lb.mu.Lock()
 	prev := lb.lastSelectionLog[proto]
-	if prev == k {
+	lastAt := lb.lastSelectionLogAt[proto]
+	if prev == k && now.Sub(lastAt) < repeatedSelectionLogInterval {
 		lb.mu.Unlock()
 		return
 	}
 	lb.lastSelectionLog[proto] = k
+	lb.lastSelectionLogAt[proto] = now
 	lb.mu.Unlock()
 
 	log.Printf("[lb] selected upstream proto=%s upstream=%q reason=%s", proto, upstream, reason)
