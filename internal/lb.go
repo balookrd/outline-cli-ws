@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -130,6 +131,33 @@ func (lb *LoadBalancer) logSelectionIfChanged(proto, upstream, reason string) {
 	log.Printf("[lb] selected upstream proto=%s upstream=%q reason=%s", proto, upstream, reason)
 }
 
+func (lb *LoadBalancer) udpCandidateSummary(pool []*UpstreamState, now time.Time) string {
+	parts := make([]string, 0, len(pool))
+	for _, st := range pool {
+		st.mu.Lock()
+		healthy := st.udp.healthy
+		cooldownUntil := st.udpCooldownUntil
+		rtt := st.udp.rttEWMA
+		lastErr := st.udp.lastError
+		st.mu.Unlock()
+
+		state := "up"
+		if !healthy {
+			state = "down"
+		}
+		cooldown := "no"
+		if now.Before(cooldownUntil) {
+			cooldown = time.Until(cooldownUntil).String()
+		}
+		errTxt := "nil"
+		if lastErr != nil {
+			errTxt = lastErr.Error()
+		}
+		parts = append(parts, fmt.Sprintf("%s{state=%s,cooldown=%s,rtt=%s,last_err=%q}", st.cfg.Name, state, cooldown, rtt, errTxt))
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 	now := time.Now()
 
@@ -156,6 +184,9 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 
 	best, bestRTT, err := lb.pickBestCandidateByEndpoint(pool, now, isTCP)
 	if err != nil {
+		if !isTCP {
+			log.Printf("[lb] udp selection failed: %v; candidates: %s", err, lb.udpCandidateSummary(pool, now))
+		}
 		return nil, err
 	}
 

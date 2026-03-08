@@ -42,6 +42,7 @@ func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 	case 0x01: // CONNECT
 		s.handleConnect(ctx, c, dst)
 	case 0x03: // UDP ASSOCIATE
+		log.Printf("socks5 UDP ASSOCIATE requested client=%s", c.RemoteAddr())
 		s.handleUDPAssociate(ctx, c)
 	default:
 		_ = socks5Reply(c, 0x07, "0.0.0.0:0") // Command not supported
