@@ -13,6 +13,7 @@ import (
 
 const repeatedSelectionLogInterval = 30 * time.Second
 const probeParallelLimit = 2
+const probeDialParallelLimit = 4
 
 type hcState struct {
 	healthy      bool
@@ -49,6 +50,7 @@ type UpstreamState struct {
 	// warm-standby TCP
 	standbyMu  sync.Mutex
 	standbyTCP WSConn
+	standbyUDP WSConn
 }
 
 type LoadBalancer struct {
@@ -67,8 +69,9 @@ type LoadBalancer struct {
 	lastSelectionLog   map[string]string
 	lastSelectionLogAt map[string]time.Time
 
-	dialSem  chan struct{}
-	probeSem chan struct{}
+	dialSem      chan struct{}
+	probeSem     chan struct{}
+	probeDialSem chan struct{}
 }
 
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
@@ -82,6 +85,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}, lastSelectionLogAt: map[string]time.Time{}}
 	lb.dialSem = make(chan struct{}, 32) // default parallel dials
 	lb.probeSem = make(chan struct{}, probeParallelLimit)
+	lb.probeDialSem = make(chan struct{}, probeDialParallelLimit)
 	return lb
 }
 
@@ -485,6 +489,10 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 					_ = u.standbyTCP.Close(WSStatusNormalClosure, "shutdown")
 					u.standbyTCP = nil
 				}
+				if u.standbyUDP != nil {
+					_ = u.standbyUDP.Close(WSStatusNormalClosure, "shutdown")
+					u.standbyUDP = nil
+				}
 				u.standbyMu.Unlock()
 			}
 			return
@@ -498,6 +506,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 			for _, u := range top {
 				// прогреваем параллельно
 				go lb.EnsureStandbyTCP(ctx, u)
+				go lb.EnsureStandbyUDP(ctx, u)
 			}
 		}
 	}
@@ -551,11 +560,12 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 		err error
 	)
 	transportStarted := time.Now()
-	if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
-		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
-	} else {
-		rtt, err = ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
-	}
+	rtt, err = lb.runProbeDialLimited(cctx, func() (time.Duration, error) {
+		if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
+			return ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
+		}
+		return ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	})
 	observeProbe(st.cfg.Name, "tcp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
@@ -563,7 +573,9 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 	if err == nil && lb.probe.EnableTCP {
 		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
+		prtt, perr := lb.runProbeDialLimited(pctx, func() (time.Duration, error) {
+			return ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
+		})
 		pcancel()
 		observeProbe(st.cfg.Name, "tcp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
@@ -607,11 +619,12 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 		err error
 	)
 	transportStarted := time.Now()
-	if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
-		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
-	} else {
-		rtt, err = ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
-	}
+	rtt, err = lb.runProbeDialLimited(cctx, func() (time.Duration, error) {
+		if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
+			return ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
+		}
+		return ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	})
 	observeProbe(st.cfg.Name, "udp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
@@ -619,7 +632,9 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 	if err == nil && lb.probe.EnableUDP {
 		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
+		prtt, perr := lb.runProbeDialLimited(pctx, func() (time.Duration, error) {
+			return ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
+		})
 		pcancel()
 		observeProbe(st.cfg.Name, "udp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
@@ -742,6 +757,30 @@ func (lb *LoadBalancer) releaseProbeSlot() {
 	case <-lb.probeSem:
 	default:
 	}
+}
+
+func (lb *LoadBalancer) acquireProbeDialSlot(ctx context.Context) error {
+	select {
+	case lb.probeDialSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lb *LoadBalancer) releaseProbeDialSlot() {
+	select {
+	case <-lb.probeDialSem:
+	default:
+	}
+}
+
+func (lb *LoadBalancer) runProbeDialLimited(ctx context.Context, fn func() (time.Duration, error)) (time.Duration, error) {
+	if err := lb.acquireProbeDialSlot(ctx); err != nil {
+		return 0, err
+	}
+	defer lb.releaseProbeDialSlot()
+	return fn()
 }
 
 func (lb *LoadBalancer) acquireDialSlot(ctx context.Context) error {

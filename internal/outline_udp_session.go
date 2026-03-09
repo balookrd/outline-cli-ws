@@ -48,7 +48,7 @@ type OutlineUDPSession struct {
 func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *UpstreamState) (*OutlineUDPSession, error) {
 	ctx, cancel := context.WithCancel(parent)
 
-	wsc, err := lb.DialWSStreamLimited(ctx, up.cfg.UDPWSS)
+	wsc, err := lb.AcquireUDPWS(ctx, up)
 	if err != nil {
 		cancel()
 		return nil, err

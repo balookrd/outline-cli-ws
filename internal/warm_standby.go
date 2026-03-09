@@ -48,6 +48,20 @@ func (lb *LoadBalancer) AcquireTCPWSForFlow(ctx context.Context, up *UpstreamSta
 	return lb.acquireTCPWS(ctx, up, flowID)
 }
 
+// AcquireUDPWS returns a warm standby UDP websocket when available, otherwise dials fresh.
+func (lb *LoadBalancer) AcquireUDPWS(ctx context.Context, up *UpstreamState) (WSConn, error) {
+	up.standbyMu.Lock()
+	c := up.standbyUDP
+	up.standbyUDP = nil
+	up.standbyMu.Unlock()
+	if c != nil {
+		wsDebugf("acquire udp ws: got standby upstream=%q", up.cfg.Name)
+		return c, nil
+	}
+	wsDebugf("acquire udp ws: dialing fresh upstream=%q", up.cfg.Name)
+	return lb.DialWSStreamLimited(ctx, up.cfg.UDPWSS)
+}
+
 func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flowID uint64) (WSConn, error) {
 	logf := func(format string, args ...any) {
 		if flowID > 0 {
@@ -142,6 +156,44 @@ func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *UpstreamState)
 		_ = c.Close(WSStatusNormalClosure, "duplicate-standby")
 	} else {
 		up.standbyTCP = c
+	}
+	up.standbyMu.Unlock()
+}
+
+// EnsureStandbyUDP keeps a warm UDP websocket for healthy upstream.
+func (lb *LoadBalancer) EnsureStandbyUDP(ctx context.Context, up *UpstreamState) {
+	up.mu.Lock()
+	ok := up.udp.healthy && time.Now().After(up.udpCooldownUntil)
+	up.mu.Unlock()
+	if !ok {
+		up.standbyMu.Lock()
+		if up.standbyUDP != nil {
+			_ = up.standbyUDP.Close(WSStatusNormalClosure, "standby-reset")
+			up.standbyUDP = nil
+		}
+		up.standbyMu.Unlock()
+		return
+	}
+
+	up.standbyMu.Lock()
+	exists := up.standbyUDP != nil
+	up.standbyMu.Unlock()
+	if exists {
+		return
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, wsDialTimeoutForURL(lb.hc.Timeout, up.cfg.UDPWSS))
+	defer cancel()
+	c, err := DialWSStream(cctx, up.cfg.UDPWSS, lb.fwmark)
+	if err != nil {
+		return
+	}
+
+	up.standbyMu.Lock()
+	if up.standbyUDP != nil {
+		_ = c.Close(WSStatusNormalClosure, "duplicate-standby")
+	} else {
+		up.standbyUDP = c
 	}
 	up.standbyMu.Unlock()
 }
