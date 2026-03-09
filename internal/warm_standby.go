@@ -79,7 +79,7 @@ func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flo
 
 	if c != nil {
 		logf("acquire tcp ws: got standby candidate upstream=%q", up.cfg.Name)
-		checkCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		checkCtx, cancel := context.WithTimeout(ctx, lb.sel.StandbyKeepaliveProbeTimeout)
 		aliveStarted := time.Now()
 		ok := wsAliveCheck(checkCtx, c)
 		cancel()
@@ -184,4 +184,57 @@ func (lb *LoadBalancer) EnsureStandbyUDP(ctx context.Context, up *UpstreamState)
 		up.standbyUDP = c
 	}
 	up.standbyMu.Unlock()
+}
+
+func (lb *LoadBalancer) checkStandbyKeepalive(ctx context.Context) {
+	lb.mu.Lock()
+	pool := append([]*UpstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
+	for _, up := range pool {
+		lb.keepaliveOneStandby(ctx, up, "tcp")
+		lb.keepaliveOneStandby(ctx, up, "udp")
+	}
+}
+
+func (lb *LoadBalancer) keepaliveOneStandby(ctx context.Context, up *UpstreamState, proto string) {
+	up.standbyMu.Lock()
+	var c WSConn
+	if proto == "tcp" {
+		c = up.standbyTCP
+		up.standbyTCP = nil
+	} else {
+		c = up.standbyUDP
+		up.standbyUDP = nil
+	}
+	up.standbyMu.Unlock()
+
+	if c == nil {
+		return
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, lb.sel.StandbyKeepaliveProbeTimeout)
+	ok := wsAliveCheck(checkCtx, c)
+	cancel()
+	if !ok {
+		_ = c.Close(WSStatusNormalClosure, "standby-keepalive-failed")
+		wsDebugf("standby keepalive failed upstream=%q proto=%s", up.cfg.Name, proto)
+		return
+	}
+
+	up.standbyMu.Lock()
+	if proto == "tcp" {
+		if up.standbyTCP == nil {
+			up.standbyTCP = c
+			c = nil
+		}
+	} else {
+		if up.standbyUDP == nil {
+			up.standbyUDP = c
+			c = nil
+		}
+	}
+	up.standbyMu.Unlock()
+	if c != nil {
+		_ = c.Close(WSStatusNormalClosure, "duplicate-standby")
+	}
 }

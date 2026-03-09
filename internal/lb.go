@@ -476,6 +476,13 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	t := time.NewTicker(lb.sel.WarmStandbyInterval)
 	defer t.Stop()
 
+	var keepaliveC <-chan time.Time
+	if lb.sel.StandbyKeepalive {
+		kt := time.NewTicker(lb.sel.StandbyKeepaliveInterval)
+		defer kt.Stop()
+		keepaliveC = kt.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -496,6 +503,8 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 				u.standbyMu.Unlock()
 			}
 			return
+		case <-keepaliveC:
+			lb.checkStandbyKeepalive(ctx)
 		case <-t.C:
 			now := time.Now()
 			n := lb.sel.WarmStandbyN

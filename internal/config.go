@@ -60,8 +60,11 @@ type SelectionConfig struct {
 	Cooldown  time.Duration `yaml:"cooldown"`
 	MinSwitch time.Duration `yaml:"min_switch"`
 
-	WarmStandbyN        int           `yaml:"warm_standby_n"`        // сколько апстримов держать прогретыми (1-2)
-	WarmStandbyInterval time.Duration `yaml:"warm_standby_interval"` // как часто проверять/догревать
+	WarmStandbyN                 int           `yaml:"warm_standby_n"`                  // сколько апстримов держать прогретыми (1-2)
+	WarmStandbyInterval          time.Duration `yaml:"warm_standby_interval"`           // как часто проверять/догревать
+	StandbyKeepalive             bool          `yaml:"standby_keepalive"`               // ping/pong keepalive for idle standby ws
+	StandbyKeepaliveInterval     time.Duration `yaml:"standby_keepalive_interval"`      // cadence of keepalive checks
+	StandbyKeepaliveProbeTimeout time.Duration `yaml:"standby_keepalive_probe_timeout"` // timeout per keepalive probe
 }
 
 type UpstreamConfig struct {
@@ -155,6 +158,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Selection.WarmStandbyInterval == 0 {
 		c.Selection.WarmStandbyInterval = 2 * time.Second
+	}
+	if c.Selection.StandbyKeepaliveInterval == 0 {
+		c.Selection.StandbyKeepaliveInterval = 15 * time.Second
+	}
+	if c.Selection.StandbyKeepaliveProbeTimeout == 0 {
+		c.Selection.StandbyKeepaliveProbeTimeout = 1200 * time.Millisecond
 	}
 	if c.Probe.Timeout == 0 {
 		c.Probe.Timeout = 2 * time.Second

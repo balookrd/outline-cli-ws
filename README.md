@@ -548,14 +548,19 @@ If your runtime/security profile still blocks `setns` (seccomp/AppArmor/SELinux)
 
 # Warm-Standby
 
-Keeps N TCP connections pre-opened:
+Keeps N upstream standby WebSocket connections pre-opened (TCP + UDP):
 
 ```yaml
 selection:
   warm_standby_n: 2
+  warm_standby_interval: "2s"
+  standby_keepalive: true
+  standby_keepalive_interval: "15s"
+  standby_keepalive_probe_timeout: "1200ms"
 ```
 
-Instant failover without cold handshake.
+`standby_keepalive` enables periodic WS ping/pong probes for idle standby slots.
+If keepalive fails, stale standby links are dropped and recreated on the next warm cycle.
 
 ---
 
