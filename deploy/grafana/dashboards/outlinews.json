@@ -846,8 +846,8 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (proto,stage,result) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
-          "legendFormat": "{{proto}}/{{stage}} {{result}}",
+          "expr": "sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
+          "legendFormat": "{{instance}}/{{upstream}}/{{proto}}/{{stage}} {{result}}",
           "range": true,
           "refId": "A"
         }
@@ -890,8 +890,8 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (proto,stage,result) (rate(outlinews_probe_duration_seconds_sum{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum by (proto,stage,result) (rate(outlinews_probe_duration_seconds_count{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9)",
-          "legendFormat": "{{proto}}/{{stage}} {{result}}",
+          "expr": "sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_sum{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_count{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9)",
+          "legendFormat": "{{instance}}/{{upstream}}/{{proto}}/{{stage}} {{result}}",
           "range": true,
           "refId": "A"
         }
@@ -936,8 +936,8 @@
             "uid": "${DS_PROM}"
           },
           "editorMode": "code",
-          "expr": "sum by (proto) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\",result=\"error\"}[5m])) / clamp_min(sum by (proto) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9)",
-          "legendFormat": "{{proto}}",
+          "expr": "label_replace(sum by (instance,upstream,proto,stage) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\",result=\"error\"}[5m])) / clamp_min(sum by (instance,upstream,proto,stage) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9), \"result\", \"error\", \"proto\", \".*\")",
+          "legendFormat": "{{instance}}/{{upstream}}/{{proto}}/{{stage}} {{result}}",
           "range": true,
           "refId": "A"
         }
