@@ -12,6 +12,7 @@ import (
 )
 
 const repeatedSelectionLogInterval = 30 * time.Second
+const probeParallelLimit = 2
 
 type hcState struct {
 	healthy      bool
@@ -66,7 +67,8 @@ type LoadBalancer struct {
 	lastSelectionLog   map[string]string
 	lastSelectionLogAt map[string]time.Time
 
-	dialSem chan struct{}
+	dialSem  chan struct{}
+	probeSem chan struct{}
 }
 
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
@@ -79,6 +81,7 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 	}
 	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}, lastSelectionLogAt: map[string]time.Time{}}
 	lb.dialSem = make(chan struct{}, 32) // default parallel dials
+	lb.probeSem = make(chan struct{}, probeParallelLimit)
 	return lb
 }
 
@@ -530,6 +533,14 @@ func shouldUseH3Healthcheck(rawurl string) bool {
 }
 
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
+	if err := lb.acquireProbeSlot(parent); err != nil {
+		st.mu.Lock()
+		st.tcp.inFlight = false
+		st.mu.Unlock()
+		return
+	}
+	defer lb.releaseProbeSlot()
+
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
@@ -574,6 +585,14 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 }
 
 func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
+	if err := lb.acquireProbeSlot(parent); err != nil {
+		st.mu.Lock()
+		st.udp.inFlight = false
+		st.mu.Unlock()
+		return
+	}
+	defer lb.releaseProbeSlot()
+
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
@@ -699,6 +718,22 @@ func (lb *LoadBalancer) nextIntervalOnSuccess(h hcState) time.Duration {
 		next = lb.hc.MaxInterval
 	}
 	return next
+}
+
+func (lb *LoadBalancer) acquireProbeSlot(ctx context.Context) error {
+	select {
+	case lb.probeSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lb *LoadBalancer) releaseProbeSlot() {
+	select {
+	case <-lb.probeSem:
+	default:
+	}
 }
 
 func (lb *LoadBalancer) acquireDialSlot(ctx context.Context) error {
