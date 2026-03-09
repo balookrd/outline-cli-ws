@@ -793,6 +793,157 @@
       },
       "title": "Runbook notes",
       "type": "text"
+    },
+    {
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "id": 19,
+      "panels": [],
+      "title": "Probe health",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Probe execution rate by protocol/stage/result.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 48
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (proto,stage,result) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m]))",
+          "legendFormat": "{{proto}}/{{stage}} {{result}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Probe run rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Average probe duration by protocol/stage/result.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 48
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (proto,stage,result) (rate(outlinews_probe_duration_seconds_sum{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])) / clamp_min(sum by (proto,stage,result) (rate(outlinews_probe_duration_seconds_count{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9)",
+          "legendFormat": "{{proto}}/{{stage}} {{result}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Probe avg duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Probe error share over total runs by protocol.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 48
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (proto) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\",result=\"error\"}[5m])) / clamp_min(sum by (proto) (rate(outlinews_probe_runs_total{instance=~\"$instance\",upstream=~\"$upstream\",proto=~\"$proto\"}[5m])), 1e-9)",
+          "legendFormat": "{{proto}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Probe error ratio",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

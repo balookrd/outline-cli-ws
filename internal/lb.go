@@ -550,18 +550,22 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 		rtt time.Duration
 		err error
 	)
+	transportStarted := time.Now()
 	if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
 		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
 	} else {
 		rtt, err = ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
 	}
+	observeProbe(st.cfg.Name, "tcp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
 	}
 	if err == nil && lb.probe.EnableTCP {
+		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
 		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
 		pcancel()
+		observeProbe(st.cfg.Name, "tcp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
 			// Keep transport health green when websocket handshake itself is OK.
 			// Quality probes are best-effort and may fail due to target-specific
@@ -602,18 +606,22 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 		rtt time.Duration
 		err error
 	)
+	transportStarted := time.Now()
 	if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
 		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
 	} else {
 		rtt, err = ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
 	}
+	observeProbe(st.cfg.Name, "udp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
 	}
 	if err == nil && lb.probe.EnableUDP {
+		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
 		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
 		pcancel()
+		observeProbe(st.cfg.Name, "udp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
 			log.Printf("[HC|udp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
