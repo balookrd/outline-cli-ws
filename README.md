@@ -27,7 +27,7 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 * ✅ Fastest-first load balancing
 * ✅ Sticky routing + hysteresis
 * ✅ Runtime failover (instant switch on error)
-* ✅ Warm-standby WebSocket connections
+* ✅ Warm-standby WebSocket connections (TCP + UDP)
 * ✅ Separate TCP / UDP health states
 
 ---
@@ -36,6 +36,7 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 
 * ✅ Adaptive health-check scheduler
 * ✅ Active quality probe (real traffic test)
+* ✅ Probe concurrency limits (execution + dial isolation)
 * ✅ Separate TCP / UDP scoring
 * ✅ RTT EWMA scoring
 * ✅ Failure penalty model
@@ -62,9 +63,10 @@ Applications / System traffic
       ├── TCP Health (adaptive)
       ├── UDP Health (adaptive)
       ├── Active Quality Probe
+      ├── Probe Concurrency Guard
       ├── Fastest-first + Sticky
       ├── Runtime Failover
-      └── Warm-standby
+      └── Warm-standby (TCP + UDP)
             │
             ▼
       Shadowsocks AEAD
@@ -584,6 +586,37 @@ Run with metrics enabled:
 ```
 
 Then scrape `http://localhost:9100/metrics`.
+
+Probe-specific metrics (added):
+
+* `outlinews_probe_runs_total{upstream,proto,stage,result}`
+  * `stage`: `transport` or `quality`
+  * `result`: `ok` or `error`
+* `outlinews_probe_duration_seconds_count{...}` and `outlinews_probe_duration_seconds_sum{...}`
+  * use these to calculate average probe duration per label set
+
+Examples:
+
+```promql
+sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_runs_total[5m]))
+```
+
+```promql
+sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_sum[5m]))
+/
+clamp_min(sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_count[5m])), 1e-9)
+```
+
+## Probe execution model
+
+Background probes run per-upstream and per-protocol (TCP/UDP) with adaptive scheduling.
+To avoid probe storms impacting user traffic:
+
+* probe execution parallelism is limited globally
+* probe dial parallelism is limited separately
+* user traffic dials use their own limiter
+
+This isolates health/probe workload from the data path under high QUIC/H3 probe pressure.
 
 ## Grafana dashboard
 
