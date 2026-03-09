@@ -8,6 +8,14 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 
 # ✨ Features
 
+## 🧭 Recent Reliability & Performance Updates
+
+* ✅ Probe execution + dial isolation limits to protect user traffic under heavy background checks
+* ✅ Probe observability in Prometheus/Grafana (`runs`, `duration`, `error ratio`)
+* ✅ Warm-standby expanded to both TCP and UDP upstream WebSocket paths
+* ✅ Lower allocation pressure in relay hot-paths (TCP copy buffer pool, UDP send/recv pools)
+* ✅ Cleaner operational logs (deduplicated upstream selection logs, expected close handling)
+
 ### Core Transport
 
 * ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
@@ -77,6 +85,17 @@ Applications / System traffic
             ▼
       Outline Servers
 ```
+
+---
+
+# Operational Model (LB / Probes / Standby)
+
+* **Health checks are per-upstream and per-protocol** (`tcp` / `udp`) with adaptive intervals and EWMA RTT scoring.
+* **Probe workload is isolated** via independent limiters so background checks do not overwhelm data-path connection establishment.
+* **Standby pool behavior**:
+  * TCP: warm standby with active liveness validation before handoff.
+  * UDP: warm standby pre-dial for faster UDP session bring-up.
+* **Failure handling** keeps TCP/UDP cooldown and health state separate, so one protocol degradation does not immediately poison the other.
 
 ---
 
