@@ -85,23 +85,11 @@ func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flo
 		cancel()
 		logf("acquire tcp ws: standby alive-check upstream=%q ok=%v elapsed=%s", up.cfg.Name, ok, time.Since(aliveStarted))
 
-		// Strict flow policy:
-		// For real user flows (flowID>0), even successful active probing marks
-		// standby as "probed" and we force a fresh dial. This avoids handing a
-		// potentially closing/half-stale stream to user traffic.
-		if flowID > 0 {
-			reason := "probed"
-			if !ok {
-				reason = "not-alive"
-			}
-			_ = c.Close(WSStatusNormalClosure, "standby-rejected")
-			logf("acquire tcp ws: standby rejected upstream=%q reason=%s", up.cfg.Name, reason)
-		} else if ok {
+		if ok {
 			return c, nil
-		} else {
-			_ = c.Close(WSStatusNormalClosure, "stale-standby")
-			logf("acquire tcp ws: standby rejected upstream=%q reason=not-alive", up.cfg.Name)
 		}
+		_ = c.Close(WSStatusNormalClosure, "stale-standby")
+		logf("acquire tcp ws: standby rejected upstream=%q reason=not-alive", up.cfg.Name)
 	}
 
 	// 2) иначе — обычный dial
