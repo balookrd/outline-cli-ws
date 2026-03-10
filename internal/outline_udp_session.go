@@ -45,6 +45,11 @@ type OutlineUDPSession struct {
 	sendPool sync.Pool // stores *[]byte for outbound packet assembly
 }
 
+const (
+	udpPoolDefaultCap   = 2048
+	udpPoolMaxRetainCap = 16 * 1024
+)
+
 func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *UpstreamState) (*OutlineUDPSession, error) {
 	ctx, cancel := context.WithCancel(parent)
 
@@ -72,11 +77,11 @@ func NewOutlineUDPSession(parent context.Context, lb *LoadBalancer, up *Upstream
 		subs:   make(map[addrKey]chan UDPPayload),
 	}
 	s.recvPool.New = func() any {
-		b := make([]byte, 0, 2048)
+		b := make([]byte, 0, udpPoolDefaultCap)
 		return &b
 	}
 	s.sendPool.New = func() any {
-		b := make([]byte, 0, 2048)
+		b := make([]byte, 0, udpPoolDefaultCap)
 		return &b
 	}
 	go s.readLoop()
@@ -145,7 +150,11 @@ func (s *OutlineUDPSession) Send(dst string, payload []byte) error {
 	plain = append(plain, ssAddr...)
 	plain = append(plain, payload...)
 	_, err := s.enc.WriteTo(plain, dummyAddr{})
-	*bufPtr = plain[:0]
+	if cap(plain) > udpPoolMaxRetainCap {
+		*bufPtr = make([]byte, 0, udpPoolDefaultCap)
+	} else {
+		*bufPtr = plain[:0]
+	}
 	s.sendPool.Put(bufPtr)
 	return err
 }
@@ -181,7 +190,11 @@ func (s *OutlineUDPSession) readLoop() {
 		msg := UDPPayload{
 			B: pb,
 			release: func() {
-				*pbPtr = pb[:0]
+				if cap(pb) > udpPoolMaxRetainCap {
+					*pbPtr = make([]byte, 0, udpPoolDefaultCap)
+				} else {
+					*pbPtr = pb[:0]
+				}
 				s.recvPool.Put(pbPtr)
 			},
 		}
