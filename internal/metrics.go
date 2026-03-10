@@ -27,6 +27,9 @@ type telemetry struct {
 	tunBytes      map[string]uint64
 	tunDrops      map[string]uint64
 	tunErrors     map[string]uint64
+	probeRuns     map[string]uint64
+	probeDurSum   map[string]float64
+	probeDurCount map[string]uint64
 }
 
 var (
@@ -52,6 +55,9 @@ func EnablePrometheusMetrics() {
 	metrics.tunBytes = make(map[string]uint64)
 	metrics.tunDrops = make(map[string]uint64)
 	metrics.tunErrors = make(map[string]uint64)
+	metrics.probeRuns = make(map[string]uint64)
+	metrics.probeDurSum = make(map[string]float64)
+	metrics.probeDurCount = make(map[string]uint64)
 	metrics.enabled = true
 }
 
@@ -194,6 +200,26 @@ func observeTunError(operation string) {
 	metrics.tunErrors[fmt.Sprintf("op=%s", operation)]++
 }
 
+func observeProbe(upstream, proto, stage string, err error, d time.Duration) {
+	metricsMu.RLock()
+	if !metrics.enabled {
+		metricsMu.RUnlock()
+		return
+	}
+	metrics.mu.Lock()
+	metricsMu.RUnlock()
+	defer metrics.mu.Unlock()
+
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	k := fmt.Sprintf("upstream=%s,proto=%s,stage=%s,result=%s", upstream, proto, stage, result)
+	metrics.probeRuns[k]++
+	metrics.probeDurCount[k]++
+	metrics.probeDurSum[k] += d.Seconds()
+}
+
 func failureReason(err error) string {
 	if err == nil {
 		return "unknown"
@@ -238,6 +264,8 @@ func metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	writeCounterVec(w, "outlinews_tun_bytes_total", metrics.tunBytes)
 	writeCounterVec(w, "outlinews_tun_drops_total", metrics.tunDrops)
 	writeCounterVec(w, "outlinews_tun_errors_total", metrics.tunErrors)
+	writeCounterVec(w, "outlinews_probe_runs_total", metrics.probeRuns)
+	writeSummaryAsCountAndSum(w, "outlinews_probe_duration_seconds", metrics.probeDurCount, metrics.probeDurSum)
 }
 
 func writeCounterVec(w http.ResponseWriter, name string, data map[string]uint64) {

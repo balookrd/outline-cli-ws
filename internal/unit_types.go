@@ -29,11 +29,14 @@ type HealthcheckConfig struct {
 }
 
 type SelectionConfig struct {
-	StickyTTL           time.Duration
-	MinSwitch           time.Duration
-	Cooldown            time.Duration
-	WarmStandbyN        int
-	WarmStandbyInterval time.Duration
+	StickyTTL                    time.Duration
+	MinSwitch                    time.Duration
+	Cooldown                     time.Duration
+	WarmStandbyN                 int
+	WarmStandbyInterval          time.Duration
+	StandbyKeepalive             bool
+	StandbyKeepaliveInterval     time.Duration
+	StandbyKeepaliveProbeTimeout time.Duration
 }
 
 type ProbeConfig struct {

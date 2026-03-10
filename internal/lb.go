@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
+
+const repeatedSelectionLogInterval = 30 * time.Second
+const probeParallelLimit = 2
+const probeDialParallelLimit = 4
 
 type hcState struct {
 	healthy      bool
@@ -45,6 +50,7 @@ type UpstreamState struct {
 	// warm-standby TCP
 	standbyMu  sync.Mutex
 	standbyTCP WSConn
+	standbyUDP WSConn
 }
 
 type LoadBalancer struct {
@@ -59,7 +65,13 @@ type LoadBalancer struct {
 	current     *UpstreamState
 	stickyUntil time.Time
 
-	dialSem chan struct{}
+	// suppresses repetitive unchanged selection log lines by protocol.
+	lastSelectionLog   map[string]string
+	lastSelectionLogAt map[string]time.Time
+
+	dialSem      chan struct{}
+	probeSem     chan struct{}
+	probeDialSem chan struct{}
 }
 
 func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionConfig, probe ProbeConfig, fwmark uint32) *LoadBalancer {
@@ -70,8 +82,10 @@ func NewLoadBalancer(ups []UpstreamConfig, hc HealthcheckConfig, sel SelectionCo
 		s.udp.healthy = false
 		pool = append(pool, s)
 	}
-	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool}
+	lb := &LoadBalancer{hc: hc, sel: sel, probe: probe, fwmark: fwmark, pool: pool, lastSelectionLog: map[string]string{}, lastSelectionLogAt: map[string]time.Time{}}
 	lb.dialSem = make(chan struct{}, 32) // default parallel dials
+	lb.probeSem = make(chan struct{}, probeParallelLimit)
+	lb.probeDialSem = make(chan struct{}, probeDialParallelLimit)
 	return lb
 }
 
@@ -107,6 +121,50 @@ func (lb *LoadBalancer) PickUDP() (*UpstreamState, error) {
 	return lb.pickByEndpoint(false)
 }
 
+func (lb *LoadBalancer) logSelectionIfChanged(proto, upstream, reason string) {
+	now := time.Now()
+	k := upstream + "|" + reason
+	lb.mu.Lock()
+	prev := lb.lastSelectionLog[proto]
+	lastAt := lb.lastSelectionLogAt[proto]
+	if prev == k && now.Sub(lastAt) < repeatedSelectionLogInterval {
+		lb.mu.Unlock()
+		return
+	}
+	lb.lastSelectionLog[proto] = k
+	lb.lastSelectionLogAt[proto] = now
+	lb.mu.Unlock()
+
+	log.Printf("[lb] selected upstream proto=%s upstream=%q reason=%s", proto, upstream, reason)
+}
+
+func (lb *LoadBalancer) udpCandidateSummary(pool []*UpstreamState, now time.Time) string {
+	parts := make([]string, 0, len(pool))
+	for _, st := range pool {
+		st.mu.Lock()
+		healthy := st.udp.healthy
+		cooldownUntil := st.udpCooldownUntil
+		rtt := st.udp.rttEWMA
+		lastErr := st.udp.lastError
+		st.mu.Unlock()
+
+		state := "up"
+		if !healthy {
+			state = "down"
+		}
+		cooldown := "no"
+		if now.Before(cooldownUntil) {
+			cooldown = time.Until(cooldownUntil).String()
+		}
+		errTxt := "nil"
+		if lastErr != nil {
+			errTxt = lastErr.Error()
+		}
+		parts = append(parts, fmt.Sprintf("%s{state=%s,cooldown=%s,rtt=%s,last_err=%q}", st.cfg.Name, state, cooldown, rtt, errTxt))
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 	now := time.Now()
 
@@ -123,6 +181,9 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		ok := cur.tcp.healthy && now.After(cur.tcpCooldownUntil)
 		cur.mu.Unlock()
 		if ok {
+			// Sticky выбор может происходить очень часто (на каждый новый flow),
+			// поэтому оставляем это в debug-логах, чтобы не зашумлять обычные логи.
+			wsDebugf("[lb] selected upstream proto=tcp upstream=%q reason=sticky", cur.cfg.Name)
 			observeSelection(cur.cfg.Name, "tcp")
 			return cur, nil
 		}
@@ -130,6 +191,9 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 
 	best, bestRTT, err := lb.pickBestCandidateByEndpoint(pool, now, isTCP)
 	if err != nil {
+		if !isTCP {
+			log.Printf("[lb] udp selection failed: %v; candidates: %s", err, lb.udpCandidateSummary(pool, now))
+		}
 		return nil, err
 	}
 
@@ -140,12 +204,15 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		curRTT := cur.tcp.rttEWMA
 		cur.mu.Unlock()
 
-		if curOK && curRTT > 0 && bestRTT > 0 {
+		if cur != best && curOK && curRTT > 0 && bestRTT > 0 {
 			if curRTT-bestRTT < lb.sel.MinSwitch {
 				lb.mu.Lock()
 				lb.current = cur
 				lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 				lb.mu.Unlock()
+				lb.logSelectionIfChanged("tcp", cur.cfg.Name, "hysteresis")
+				wsDebugf("[lb] hysteresis details upstream=%q current_rtt=%s candidate_rtt=%s min_switch=%s", cur.cfg.Name, curRTT, bestRTT, lb.sel.MinSwitch)
+				observeSelection(cur.cfg.Name, "tcp")
 				return cur, nil
 			}
 		}
@@ -156,8 +223,10 @@ func (lb *LoadBalancer) pickByEndpoint(isTCP bool) (*UpstreamState, error) {
 		lb.current = best
 		lb.stickyUntil = now.Add(lb.sel.StickyTTL)
 		lb.mu.Unlock()
+		lb.logSelectionIfChanged("tcp", best.cfg.Name, "best-candidate")
 		observeSelection(best.cfg.Name, "tcp")
 	} else {
+		lb.logSelectionIfChanged("udp", best.cfg.Name, "best-candidate")
 		observeSelection(best.cfg.Name, "udp")
 	}
 
@@ -407,6 +476,13 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 	t := time.NewTicker(lb.sel.WarmStandbyInterval)
 	defer t.Stop()
 
+	var keepaliveC <-chan time.Time
+	if lb.sel.StandbyKeepalive {
+		kt := time.NewTicker(lb.sel.StandbyKeepaliveInterval)
+		defer kt.Stop()
+		keepaliveC = kt.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -420,9 +496,15 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 					_ = u.standbyTCP.Close(WSStatusNormalClosure, "shutdown")
 					u.standbyTCP = nil
 				}
+				if u.standbyUDP != nil {
+					_ = u.standbyUDP.Close(WSStatusNormalClosure, "shutdown")
+					u.standbyUDP = nil
+				}
 				u.standbyMu.Unlock()
 			}
 			return
+		case <-keepaliveC:
+			lb.checkStandbyKeepalive(ctx)
 		case <-t.C:
 			now := time.Now()
 			n := lb.sel.WarmStandbyN
@@ -433,6 +515,7 @@ func (lb *LoadBalancer) RunWarmStandby(ctx context.Context) {
 			for _, u := range top {
 				// прогреваем параллельно
 				go lb.EnsureStandbyTCP(ctx, u)
+				go lb.EnsureStandbyUDP(ctx, u)
 			}
 		}
 	}
@@ -468,6 +551,14 @@ func shouldUseH3Healthcheck(rawurl string) bool {
 }
 
 func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
+	if err := lb.acquireProbeSlot(parent); err != nil {
+		st.mu.Lock()
+		st.tcp.inFlight = false
+		st.mu.Unlock()
+		return
+	}
+	defer lb.releaseProbeSlot()
+
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.TCPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
@@ -477,18 +568,25 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 		rtt time.Duration
 		err error
 	)
-	if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
-		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
-	} else {
-		rtt, err = ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
-	}
+	transportStarted := time.Now()
+	rtt, err = lb.runProbeDialLimited(cctx, func() (time.Duration, error) {
+		if shouldUseH3Healthcheck(st.cfg.TCPWSS) {
+			return ProbeH3ExtendedConnect(cctx, st.cfg.TCPWSS)
+		}
+		return ProbeWSS(cctx, st.cfg.TCPWSS, lb.fwmark)
+	})
+	observeProbe(st.cfg.Name, "tcp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("tcp probe to %s failed after %s (timeout=%s): %w", st.cfg.TCPWSS, time.Since(started), timeout, err)
 	}
 	if err == nil && lb.probe.EnableTCP {
+		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
+		prtt, perr := lb.runProbeDialLimited(pctx, func() (time.Duration, error) {
+			return ProbeTCPQuality(pctx, st.cfg, lb.probe.TCPTarget, lb.fwmark)
+		})
 		pcancel()
+		observeProbe(st.cfg.Name, "tcp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
 			// Keep transport health green when websocket handshake itself is OK.
 			// Quality probes are best-effort and may fail due to target-specific
@@ -512,6 +610,14 @@ func (lb *LoadBalancer) checkOneTCP(parent context.Context, st *UpstreamState) {
 }
 
 func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
+	if err := lb.acquireProbeSlot(parent); err != nil {
+		st.mu.Lock()
+		st.udp.inFlight = false
+		st.mu.Unlock()
+		return
+	}
+	defer lb.releaseProbeSlot()
+
 	timeout := wsDialTimeoutForURL(lb.hc.Timeout, st.cfg.UDPWSS)
 	started := time.Now()
 	cctx, cancel := context.WithTimeout(parent, timeout)
@@ -521,18 +627,25 @@ func (lb *LoadBalancer) checkOneUDP(parent context.Context, st *UpstreamState) {
 		rtt time.Duration
 		err error
 	)
-	if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
-		rtt, err = ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
-	} else {
-		rtt, err = ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
-	}
+	transportStarted := time.Now()
+	rtt, err = lb.runProbeDialLimited(cctx, func() (time.Duration, error) {
+		if shouldUseH3Healthcheck(st.cfg.UDPWSS) {
+			return ProbeH3ExtendedConnect(cctx, st.cfg.UDPWSS)
+		}
+		return ProbeWSS(cctx, st.cfg.UDPWSS, lb.fwmark)
+	})
+	observeProbe(st.cfg.Name, "udp", "transport", err, time.Since(transportStarted))
 	if err != nil {
 		err = fmt.Errorf("udp probe to %s failed after %s (timeout=%s): %w", st.cfg.UDPWSS, time.Since(started), timeout, err)
 	}
 	if err == nil && lb.probe.EnableUDP {
+		qualityStarted := time.Now()
 		pctx, pcancel := context.WithTimeout(parent, lb.probe.Timeout)
-		prtt, perr := ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
+		prtt, perr := lb.runProbeDialLimited(pctx, func() (time.Duration, error) {
+			return ProbeUDPQuality(pctx, st.cfg, lb.probe.UDPTarget, lb.probe.DNSName, lb.probe.DNSType, lb.fwmark)
+		})
 		pcancel()
+		observeProbe(st.cfg.Name, "udp", "quality", perr, time.Since(qualityStarted))
 		if perr != nil {
 			log.Printf("[HC|udp] %s quality probe failed (ignored): %v", st.cfg.Name, perr)
 		} else {
@@ -637,6 +750,46 @@ func (lb *LoadBalancer) nextIntervalOnSuccess(h hcState) time.Duration {
 		next = lb.hc.MaxInterval
 	}
 	return next
+}
+
+func (lb *LoadBalancer) acquireProbeSlot(ctx context.Context) error {
+	select {
+	case lb.probeSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lb *LoadBalancer) releaseProbeSlot() {
+	select {
+	case <-lb.probeSem:
+	default:
+	}
+}
+
+func (lb *LoadBalancer) acquireProbeDialSlot(ctx context.Context) error {
+	select {
+	case lb.probeDialSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lb *LoadBalancer) releaseProbeDialSlot() {
+	select {
+	case <-lb.probeDialSem:
+	default:
+	}
+}
+
+func (lb *LoadBalancer) runProbeDialLimited(ctx context.Context, fn func() (time.Duration, error)) (time.Duration, error) {
+	if err := lb.acquireProbeDialSlot(ctx); err != nil {
+		return 0, err
+	}
+	defer lb.releaseProbeDialSlot()
+	return fn()
 }
 
 func (lb *LoadBalancer) acquireDialSlot(ctx context.Context) error {

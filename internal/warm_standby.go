@@ -48,6 +48,20 @@ func (lb *LoadBalancer) AcquireTCPWSForFlow(ctx context.Context, up *UpstreamSta
 	return lb.acquireTCPWS(ctx, up, flowID)
 }
 
+// AcquireUDPWS returns a warm standby UDP websocket when available, otherwise dials fresh.
+func (lb *LoadBalancer) AcquireUDPWS(ctx context.Context, up *UpstreamState) (WSConn, error) {
+	up.standbyMu.Lock()
+	c := up.standbyUDP
+	up.standbyUDP = nil
+	up.standbyMu.Unlock()
+	if c != nil {
+		wsDebugf("acquire udp ws: got standby upstream=%q", up.cfg.Name)
+		return c, nil
+	}
+	wsDebugf("acquire udp ws: dialing fresh upstream=%q", up.cfg.Name)
+	return lb.DialWSStreamLimited(ctx, up.cfg.UDPWSS)
+}
+
 func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flowID uint64) (WSConn, error) {
 	logf := func(format string, args ...any) {
 		if flowID > 0 {
@@ -65,29 +79,17 @@ func (lb *LoadBalancer) acquireTCPWS(ctx context.Context, up *UpstreamState, flo
 
 	if c != nil {
 		logf("acquire tcp ws: got standby candidate upstream=%q", up.cfg.Name)
-		checkCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		checkCtx, cancel := context.WithTimeout(ctx, lb.sel.StandbyKeepaliveProbeTimeout)
 		aliveStarted := time.Now()
 		ok := wsAliveCheck(checkCtx, c)
 		cancel()
 		logf("acquire tcp ws: standby alive-check upstream=%q ok=%v elapsed=%s", up.cfg.Name, ok, time.Since(aliveStarted))
 
-		// Strict flow policy:
-		// For real user flows (flowID>0), even successful active probing marks
-		// standby as "probed" and we force a fresh dial. This avoids handing a
-		// potentially closing/half-stale stream to user traffic.
-		if flowID > 0 {
-			reason := "probed"
-			if !ok {
-				reason = "not-alive"
-			}
-			_ = c.Close(WSStatusNormalClosure, "standby-rejected")
-			logf("acquire tcp ws: standby rejected upstream=%q reason=%s", up.cfg.Name, reason)
-		} else if ok {
+		if ok {
 			return c, nil
-		} else {
-			_ = c.Close(WSStatusNormalClosure, "stale-standby")
-			logf("acquire tcp ws: standby rejected upstream=%q reason=not-alive", up.cfg.Name)
 		}
+		_ = c.Close(WSStatusNormalClosure, "stale-standby")
+		logf("acquire tcp ws: standby rejected upstream=%q reason=not-alive", up.cfg.Name)
 	}
 
 	// 2) иначе — обычный dial
@@ -144,4 +146,95 @@ func (lb *LoadBalancer) EnsureStandbyTCP(ctx context.Context, up *UpstreamState)
 		up.standbyTCP = c
 	}
 	up.standbyMu.Unlock()
+}
+
+// EnsureStandbyUDP keeps a warm UDP websocket for healthy upstream.
+func (lb *LoadBalancer) EnsureStandbyUDP(ctx context.Context, up *UpstreamState) {
+	up.mu.Lock()
+	ok := up.udp.healthy && time.Now().After(up.udpCooldownUntil)
+	up.mu.Unlock()
+	if !ok {
+		up.standbyMu.Lock()
+		if up.standbyUDP != nil {
+			_ = up.standbyUDP.Close(WSStatusNormalClosure, "standby-reset")
+			up.standbyUDP = nil
+		}
+		up.standbyMu.Unlock()
+		return
+	}
+
+	up.standbyMu.Lock()
+	exists := up.standbyUDP != nil
+	up.standbyMu.Unlock()
+	if exists {
+		return
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, wsDialTimeoutForURL(lb.hc.Timeout, up.cfg.UDPWSS))
+	defer cancel()
+	c, err := DialWSStream(cctx, up.cfg.UDPWSS, lb.fwmark)
+	if err != nil {
+		return
+	}
+
+	up.standbyMu.Lock()
+	if up.standbyUDP != nil {
+		_ = c.Close(WSStatusNormalClosure, "duplicate-standby")
+	} else {
+		up.standbyUDP = c
+	}
+	up.standbyMu.Unlock()
+}
+
+func (lb *LoadBalancer) checkStandbyKeepalive(ctx context.Context) {
+	lb.mu.Lock()
+	pool := append([]*UpstreamState(nil), lb.pool...)
+	lb.mu.Unlock()
+	for _, up := range pool {
+		lb.keepaliveOneStandby(ctx, up, "tcp")
+		lb.keepaliveOneStandby(ctx, up, "udp")
+	}
+}
+
+func (lb *LoadBalancer) keepaliveOneStandby(ctx context.Context, up *UpstreamState, proto string) {
+	up.standbyMu.Lock()
+	var c WSConn
+	if proto == "tcp" {
+		c = up.standbyTCP
+		up.standbyTCP = nil
+	} else {
+		c = up.standbyUDP
+		up.standbyUDP = nil
+	}
+	up.standbyMu.Unlock()
+
+	if c == nil {
+		return
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, lb.sel.StandbyKeepaliveProbeTimeout)
+	ok := wsAliveCheck(checkCtx, c)
+	cancel()
+	if !ok {
+		_ = c.Close(WSStatusNormalClosure, "standby-keepalive-failed")
+		wsDebugf("standby keepalive failed upstream=%q proto=%s", up.cfg.Name, proto)
+		return
+	}
+
+	up.standbyMu.Lock()
+	if proto == "tcp" {
+		if up.standbyTCP == nil {
+			up.standbyTCP = c
+			c = nil
+		}
+	} else {
+		if up.standbyUDP == nil {
+			up.standbyUDP = c
+			c = nil
+		}
+	}
+	up.standbyMu.Unlock()
+	if c != nil {
+		_ = c.Close(WSStatusNormalClosure, "duplicate-standby")
+	}
 }

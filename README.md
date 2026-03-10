@@ -8,6 +8,14 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 
 # ✨ Features
 
+## 🧭 Recent Reliability & Performance Updates
+
+* ✅ Probe execution + dial isolation limits to protect user traffic under heavy background checks
+* ✅ Probe observability in Prometheus/Grafana (`runs`, `duration`, `error ratio`)
+* ✅ Warm-standby expanded to both TCP and UDP upstream WebSocket paths
+* ✅ Lower allocation pressure in relay hot-paths (TCP copy buffer pool, UDP send/recv pools)
+* ✅ Cleaner operational logs (deduplicated upstream selection logs, expected close handling)
+
 ### Core Transport
 
 * ✅ SOCKS5 proxy (CONNECT + UDP ASSOCIATE)
@@ -27,7 +35,7 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 * ✅ Fastest-first load balancing
 * ✅ Sticky routing + hysteresis
 * ✅ Runtime failover (instant switch on error)
-* ✅ Warm-standby WebSocket connections
+* ✅ Warm-standby WebSocket connections (TCP + UDP)
 * ✅ Separate TCP / UDP health states
 
 ---
@@ -36,6 +44,7 @@ fwmark policy routing (Linux), and native WebSocket transport over **HTTP/1.1, H
 
 * ✅ Adaptive health-check scheduler
 * ✅ Active quality probe (real traffic test)
+* ✅ Probe concurrency limits (execution + dial isolation)
 * ✅ Separate TCP / UDP scoring
 * ✅ RTT EWMA scoring
 * ✅ Failure penalty model
@@ -62,9 +71,10 @@ Applications / System traffic
       ├── TCP Health (adaptive)
       ├── UDP Health (adaptive)
       ├── Active Quality Probe
+      ├── Probe Concurrency Guard
       ├── Fastest-first + Sticky
       ├── Runtime Failover
-      └── Warm-standby
+      └── Warm-standby (TCP + UDP)
             │
             ▼
       Shadowsocks AEAD
@@ -75,6 +85,17 @@ Applications / System traffic
             ▼
       Outline Servers
 ```
+
+---
+
+# Operational Model (LB / Probes / Standby)
+
+* **Health checks are per-upstream and per-protocol** (`tcp` / `udp`) with adaptive intervals and EWMA RTT scoring.
+* **Probe workload is isolated** via independent limiters so background checks do not overwhelm data-path connection establishment.
+* **Standby pool behavior**:
+  * TCP: warm standby with active liveness validation before handoff.
+  * UDP: warm standby pre-dial for faster UDP session bring-up.
+* **Failure handling** keeps TCP/UDP cooldown and health state separate, so one protocol degradation does not immediately poison the other.
 
 ---
 
@@ -527,14 +548,19 @@ If your runtime/security profile still blocks `setns` (seccomp/AppArmor/SELinux)
 
 # Warm-Standby
 
-Keeps N TCP connections pre-opened:
+Keeps N upstream standby WebSocket connections pre-opened (TCP + UDP):
 
 ```yaml
 selection:
   warm_standby_n: 2
+  warm_standby_interval: "2s"
+  standby_keepalive: true
+  standby_keepalive_interval: "15s"
+  standby_keepalive_probe_timeout: "1200ms"
 ```
 
-Instant failover without cold handshake.
+`standby_keepalive` enables periodic WS ping/pong probes for idle standby slots.
+If keepalive fails, stale standby links are dropped and recreated on the next warm cycle.
 
 ---
 
@@ -584,6 +610,37 @@ Run with metrics enabled:
 ```
 
 Then scrape `http://localhost:9100/metrics`.
+
+Probe-specific metrics (added):
+
+* `outlinews_probe_runs_total{upstream,proto,stage,result}`
+  * `stage`: `transport` or `quality`
+  * `result`: `ok` or `error`
+* `outlinews_probe_duration_seconds_count{...}` and `outlinews_probe_duration_seconds_sum{...}`
+  * use these to calculate average probe duration per label set
+
+Examples:
+
+```promql
+sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_runs_total[5m]))
+```
+
+```promql
+sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_sum[5m]))
+/
+clamp_min(sum by (instance,upstream,proto,stage,result) (rate(outlinews_probe_duration_seconds_count[5m])), 1e-9)
+```
+
+## Probe execution model
+
+Background probes run per-upstream and per-protocol (TCP/UDP) with adaptive scheduling.
+To avoid probe storms impacting user traffic:
+
+* probe execution parallelism is limited globally
+* probe dial parallelism is limited separately
+* user traffic dials use their own limiter
+
+This isolates health/probe workload from the data path under high QUIC/H3 probe pressure.
 
 ## Grafana dashboard
 

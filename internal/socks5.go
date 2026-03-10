@@ -7,8 +7,12 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type Socks5Server struct {
@@ -38,6 +42,7 @@ func (s *Socks5Server) HandleConn(ctx context.Context, c net.Conn) {
 	case 0x01: // CONNECT
 		s.handleConnect(ctx, c, dst)
 	case 0x03: // UDP ASSOCIATE
+		log.Printf("socks5 UDP ASSOCIATE requested client=%s", c.RemoteAddr())
 		s.handleUDPAssociate(ctx, c)
 	default:
 		_ = socks5Reply(c, 0x07, "0.0.0.0:0") // Command not supported
@@ -81,8 +86,31 @@ func (s *Socks5Server) handleConnect(ctx context.Context, c net.Conn, dst string
 		// Do not penalize upstream health on per-flow tunnel errors.
 		// These are often destination/client specific (curl aborts, remote TLS reset,
 		// target host policy), while the transport path itself remains healthy.
-		log.Printf("tcp tunnel err (non-health): %v", err)
+		if isExpectedTunnelCloseError(err) {
+			wsDebugf("tcp tunnel closed by peer flow=%d upstream=%q dst=%q err=%v", flowID, up.cfg.Name, dst, err)
+		} else {
+			log.Printf("tcp tunnel err (non-health): %v", err)
+		}
 	}
+}
+
+func isExpectedTunnelCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	// coder/websocket often wraps graceful closes as:
+	// "failed to get reader: received close frame: status = StatusNormalClosure ..."
+	status := websocket.CloseStatus(err)
+	if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+		return true
+	}
+	return false
 }
 
 func (s *Socks5Server) handleUDPAssociate(ctx context.Context, c net.Conn) {

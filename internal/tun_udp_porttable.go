@@ -5,6 +5,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/netip"
 	"sync"
 	"time"
@@ -63,8 +64,10 @@ func (t *udpPortTable) getOrCreate(ctx context.Context, key udpPortKey) (*udpPor
 
 	up, err := t.lb.PickUDP()
 	if err != nil {
+		log.Printf("[tun|udp] upstream selection failed src=%s:%d proto=%d err=%v", key.srcIP, key.srcPort, key.netProto, err)
 		return nil, err
 	}
+	log.Printf("[tun|udp] selected upstream=%q for src=%s:%d proto=%d", up.cfg.Name, key.srcIP, key.srcPort, key.netProto)
 	sess, err := NewOutlineUDPSession(ctx, t.lb, up)
 	if err != nil {
 		t.lb.ReportUDPFailure(up, err)

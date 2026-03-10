@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFailureReason(t *testing.T) {
@@ -110,6 +111,35 @@ func TestUpstreamTrafficMetricsExposed(t *testing.T) {
 	for _, want := range []string{
 		"outlinews_upstream_bytes_total{upstream=\"edge-1\",proto=\"udp\",dir=\"in\"} 512",
 		"outlinews_upstream_bytes_total{upstream=\"edge-1\",proto=\"udp\",dir=\"out\"} 768",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics output missing %q\nbody:\n%s", want, body)
+		}
+	}
+}
+
+func TestProbeMetricsExposed(t *testing.T) {
+	metricsMu.Lock()
+	metrics = telemetry{}
+	metricsMu.Unlock()
+
+	EnablePrometheusMetrics()
+	observeProbe("edge-1", "tcp", "transport", nil, 120*time.Millisecond)
+	observeProbe("edge-1", "udp", "quality", errors.New("timeout"), 2*time.Second)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	metricsHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metricsHandler status=%d want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"outlinews_probe_runs_total{upstream=\"edge-1\",proto=\"tcp\",stage=\"transport\",result=\"ok\"} 1",
+		"outlinews_probe_runs_total{upstream=\"edge-1\",proto=\"udp\",stage=\"quality\",result=\"error\"} 1",
+		"outlinews_probe_duration_seconds_count{upstream=\"edge-1\",proto=\"tcp\",stage=\"transport\",result=\"ok\"} 1",
+		"outlinews_probe_duration_seconds_count{upstream=\"edge-1\",proto=\"udp\",stage=\"quality\",result=\"error\"} 1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics output missing %q\nbody:\n%s", want, body)

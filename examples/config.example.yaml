@@ -27,6 +27,9 @@ selection:
   min_switch: "20ms"
   warm_standby_n: 2
   warm_standby_interval: "2s"
+  standby_keepalive: true
+  standby_keepalive_interval: "15s"
+  standby_keepalive_probe_timeout: "1200ms"
 
 healthcheck:
   interval: "5s"
