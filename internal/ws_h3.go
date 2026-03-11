@@ -60,7 +60,10 @@ type h3wsStream struct {
 	frameBuf        []byte
 }
 
-const h3MaxDataFrameSize = 64 << 20 // 64 MiB safety cap per RFC9220 DATA frame
+const (
+	h3MaxDataFrameSize  = 64 << 20 // 64 MiB safety cap per RFC9220 DATA frame
+	h3FrameBufMaxRetain = 64 << 10 // retain up to 64 KiB per stream; larger frames use ephemeral buffers
+)
 
 type h3PeerObservations struct {
 	mu                    sync.RWMutex
@@ -132,10 +135,16 @@ func (s *h3wsStream) Read(p []byte) (int, error) {
 			return 0, fmt.Errorf("h3 websocket stream protocol error: DATA frame too large: %d", n)
 		}
 
-		if cap(s.frameBuf) < int(n) {
-			s.frameBuf = make([]byte, n)
+		var payload []byte
+		if n <= h3FrameBufMaxRetain {
+			if cap(s.frameBuf) < int(n) {
+				s.frameBuf = make([]byte, n)
+			}
+			payload = s.frameBuf[:n]
+		} else {
+			// Avoid retaining large one-off frames for the lifetime of this stream.
+			payload = make([]byte, n)
 		}
-		payload := s.frameBuf[:n]
 		if _, err := io.ReadFull(s.s, payload); err != nil {
 			return 0, err
 		}
