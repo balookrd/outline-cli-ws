@@ -56,14 +56,18 @@ func DialWSStream(ctx context.Context, rawurl string, fwmark uint32) (WSConn, er
 		},
 	}
 
+	// Per-dial transport: disable HTTP keep-alive pools to avoid retaining
+	// idle connections and per-transport state across frequent probe dials.
 	tr := &http.Transport{
 		Proxy:             http.ProxyFromEnvironment,
 		DialContext:       d.DialContext,
 		ForceAttemptHTTP2: true,
+		DisableKeepAlives: true,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
 	}
+	defer tr.CloseIdleConnections()
 
 	tryH2, h2Only, tryH3, h3Only, connectOnly := parseTransportHints(u.Query())
 	wsDebugf("dial start url=%q scheme=%q hints: tryH2=%v h2Only=%v tryH3=%v h3Only=%v connectOnly=%v", uDial.Redacted(), u.Scheme, tryH2, h2Only, tryH3, h3Only, connectOnly)
