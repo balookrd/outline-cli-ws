@@ -55,9 +55,12 @@ const (
 
 type h3wsStream struct {
 	s               *quic.Stream
+	qconn           *quic.Conn
+	ep              *quic.Endpoint
 	stopPeerDrainer context.CancelFunc
 	readBuf         []byte
 	frameBuf        []byte
+	closeOnce       sync.Once
 }
 
 const (
@@ -182,14 +185,28 @@ func (s *h3wsStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *h3wsStream) Close() error {
-	if s.stopPeerDrainer != nil {
-		s.stopPeerDrainer()
-	}
-	// Do not signal FIN/STOP_SENDING here.
-	// RFC9220 WebSocket closure is carried by WS CLOSE frames inside H3 DATA.
-	// Sending QUIC stream finalization too early can terminate upload-side
-	// before the application-level close handshake fully propagates.
-	return nil
+	var closeErr error
+	s.closeOnce.Do(func() {
+		if s.stopPeerDrainer != nil {
+			s.stopPeerDrainer()
+		}
+		if s.s != nil {
+			if err := s.s.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+		if s.qconn != nil {
+			if err := s.qconn.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+		if s.ep != nil {
+			if err := s.ep.Close(context.Background()); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+	})
+	return closeErr
 }
 
 func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
@@ -359,7 +376,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	}
 	wsDebugf("h3: websocket CONNECT established")
 	h3Established = true
-	return newFramedWSConn(&h3wsStream{s: st, stopPeerDrainer: peerDrainCancel}), nil
+	return newFramedWSConn(&h3wsStream{s: st, qconn: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
 }
 
 func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.CancelFunc {
