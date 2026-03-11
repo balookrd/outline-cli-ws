@@ -83,6 +83,14 @@ func (t *udpPortTable) getOrCreate(ctx context.Context, key udpPortKey) (*udpPor
 	}
 
 	t.mu.Lock()
+	if existing := t.ports[key]; existing != nil {
+		// Another goroutine created the same source-port session while we were
+		// dialing upstream. Reuse the existing session and close the duplicate to
+		// avoid leaking ws/crypto state and background readers.
+		t.mu.Unlock()
+		sess.Close()
+		return existing, nil
+	}
 	t.ports[key] = ps
 	t.mu.Unlock()
 
