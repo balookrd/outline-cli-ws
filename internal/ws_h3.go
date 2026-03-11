@@ -55,9 +55,18 @@ const (
 
 type h3wsStream struct {
 	s               *quic.Stream
+	qconn           *quic.Conn
+	ep              *quic.Endpoint
 	stopPeerDrainer context.CancelFunc
 	readBuf         []byte
+	frameBuf        []byte
+	closeOnce       sync.Once
 }
+
+const (
+	h3MaxDataFrameSize  = 64 << 20 // 64 MiB safety cap per RFC9220 DATA frame
+	h3FrameBufMaxRetain = 64 << 10 // retain up to 64 KiB per stream; larger frames use ephemeral buffers
+)
 
 type h3PeerObservations struct {
 	mu                    sync.RWMutex
@@ -125,7 +134,20 @@ func (s *h3wsStream) Read(p []byte) (int, error) {
 			return 0, err
 		}
 
-		payload := make([]byte, n)
+		if n > h3MaxDataFrameSize {
+			return 0, fmt.Errorf("h3 websocket stream protocol error: DATA frame too large: %d", n)
+		}
+
+		var payload []byte
+		if n <= h3FrameBufMaxRetain {
+			if cap(s.frameBuf) < int(n) {
+				s.frameBuf = make([]byte, n)
+			}
+			payload = s.frameBuf[:n]
+		} else {
+			// Avoid retaining large one-off frames for the lifetime of this stream.
+			payload = make([]byte, n)
+		}
 		if _, err := io.ReadFull(s.s, payload); err != nil {
 			return 0, err
 		}
@@ -163,14 +185,28 @@ func (s *h3wsStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *h3wsStream) Close() error {
-	if s.stopPeerDrainer != nil {
-		s.stopPeerDrainer()
-	}
-	// Do not signal FIN/STOP_SENDING here.
-	// RFC9220 WebSocket closure is carried by WS CLOSE frames inside H3 DATA.
-	// Sending QUIC stream finalization too early can terminate upload-side
-	// before the application-level close handshake fully propagates.
-	return nil
+	var closeErr error
+	s.closeOnce.Do(func() {
+		if s.stopPeerDrainer != nil {
+			s.stopPeerDrainer()
+		}
+		if s.s != nil {
+			if err := s.s.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+		if s.qconn != nil {
+			if err := s.qconn.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+		if s.ep != nil {
+			if err := s.ep.Close(context.Background()); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+	})
+	return closeErr
 }
 
 func dialRFC9220(ctx context.Context, u *url.URL) (WSConn, error) {
@@ -340,7 +376,7 @@ func dialRFC9220Profile(ctx context.Context, u *url.URL, profile h3ClientStreamP
 	}
 	wsDebugf("h3: websocket CONNECT established")
 	h3Established = true
-	return newFramedWSConn(&h3wsStream{s: st, stopPeerDrainer: peerDrainCancel}), nil
+	return newFramedWSConn(&h3wsStream{s: st, qconn: qconn, ep: ep, stopPeerDrainer: peerDrainCancel}), nil
 }
 
 func startH3PeerStreamDrainer(c *quic.Conn, obs *h3PeerObservations) context.CancelFunc {
