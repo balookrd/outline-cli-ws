@@ -96,6 +96,7 @@ func (s *OutlineUDPSession) Close() {
 	s.mu.Lock()
 	for _, ch := range s.subs {
 		close(ch)
+		drainUDPPayloadChan(ch)
 	}
 	s.subs = map[addrKey]chan UDPPayload{}
 	s.mu.Unlock()
@@ -130,8 +131,15 @@ func (s *OutlineUDPSession) Unsubscribe(from string) {
 	if ch != nil {
 		delete(s.subs, k)
 		close(ch)
+		drainUDPPayloadChan(ch)
 	}
 	s.mu.Unlock()
+}
+
+func drainUDPPayloadChan(ch <-chan UDPPayload) {
+	for p := range ch {
+		p.Release()
+	}
 }
 
 func (s *OutlineUDPSession) Send(dst string, payload []byte) error {
