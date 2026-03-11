@@ -944,6 +944,167 @@
       ],
       "title": "Probe error ratio",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "id": 23,
+      "panels": [],
+      "title": "Go runtime memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "Process memory footprint by instance (alloc/heap/sys/released).",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 57
+      },
+      "id": 24,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "outlinews_go_mem_alloc_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} alloc",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "outlinews_go_heap_inuse_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} heap_inuse",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "outlinews_go_heap_released_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} heap_released",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "outlinews_go_mem_sys_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} sys",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Memory usage by instance",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "description": "GC activity by instance.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 57
+      },
+      "id": 25,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "rate(outlinews_go_gc_cycles_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} gc/s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "editorMode": "code",
+          "expr": "outlinews_go_gc_last_pause_seconds{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} last_pause",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "GC cycles and pause",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",
