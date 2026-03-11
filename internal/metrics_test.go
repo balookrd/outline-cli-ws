@@ -146,3 +146,33 @@ func TestProbeMetricsExposed(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeMemoryMetricsExposed(t *testing.T) {
+	metricsMu.Lock()
+	metrics = telemetry{}
+	metricsMu.Unlock()
+
+	EnablePrometheusMetrics()
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	metricsHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metricsHandler status=%d want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"outlinews_go_mem_alloc_bytes",
+		"outlinews_go_heap_inuse_bytes",
+		"outlinews_go_heap_idle_bytes",
+		"outlinews_go_heap_released_bytes",
+		"outlinews_go_mem_sys_bytes",
+		"outlinews_go_gc_last_pause_seconds",
+		"outlinews_go_gc_cycles_total",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics output missing %q\nbody:\n%s", want, body)
+		}
+	}
+}

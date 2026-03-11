@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -266,6 +267,28 @@ func metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	writeCounterVec(w, "outlinews_tun_errors_total", metrics.tunErrors)
 	writeCounterVec(w, "outlinews_probe_runs_total", metrics.probeRuns)
 	writeSummaryAsCountAndSum(w, "outlinews_probe_duration_seconds", metrics.probeDurCount, metrics.probeDurSum)
+	writeRuntimeMemoryMetrics(w)
+}
+
+func writeRuntimeMemoryMetrics(w http.ResponseWriter) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
+	writeGauge(w, "outlinews_go_mem_alloc_bytes", float64(ms.Alloc))
+	writeGauge(w, "outlinews_go_heap_inuse_bytes", float64(ms.HeapInuse))
+	writeGauge(w, "outlinews_go_heap_idle_bytes", float64(ms.HeapIdle))
+	writeGauge(w, "outlinews_go_heap_released_bytes", float64(ms.HeapReleased))
+	writeGauge(w, "outlinews_go_mem_sys_bytes", float64(ms.Sys))
+	writeGauge(w, "outlinews_go_gc_last_pause_seconds", float64(ms.PauseNs[(ms.NumGC+255)%256])/1e9)
+	writeCounter(w, "outlinews_go_gc_cycles_total", float64(ms.NumGC))
+}
+
+func writeGauge(w http.ResponseWriter, name string, value float64) {
+	fmt.Fprintf(w, "%s %f\n", name, value)
+}
+
+func writeCounter(w http.ResponseWriter, name string, value float64) {
+	fmt.Fprintf(w, "%s %.0f\n", name, value)
 }
 
 func writeCounterVec(w http.ResponseWriter, name string, data map[string]uint64) {
